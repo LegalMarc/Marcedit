@@ -21,7 +21,7 @@ struct AboutView: View {
                 .fontWeight(.bold)
 
             // Version (dynamic from bundle) - shows X.Y.Z format
-            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.110-beta")")
                 .font(.body)
 
             // Copyright

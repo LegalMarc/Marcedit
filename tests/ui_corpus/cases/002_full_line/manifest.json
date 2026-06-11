@@ -1,0 +1,11 @@
+{
+  "id": "002_full_line",
+  "targetText": "Sample text for editing",
+  "clickNormX": 0.25,
+  "clickNormY": 0.09,
+  "replacement": "New content here",
+  "expectedOutputText": "New content here",
+  "expectedFont": null,
+  "pageIndex": 0,
+  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/002_full_line/input.pdf"
+}

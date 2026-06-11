@@ -1,0 +1,61 @@
+Aptos
+Arial
+Arial Unicode MS
+Baskerville
+Book Antiqua
+Bookman
+Calibri
+Cambria
+Century Schoolbook
+Comic Sans MS
+Consolas
+Courier
+Courier-Bold
+Courier-BoldOblique
+Courier-Oblique
+Courier New
+CourierNewPS-BoldItalicM
+DejaVu Sans
+DejaVu Serif
+Franklin Gothic
+Garamond
+Georgia
+Helvetica
+Helvetica-Bold
+Helvetica-BoldOblique
+Helvetica-Oblique
+Hiragino Sans
+Impact
+Inter
+Lato
+Liberation Mono
+Liberation Sans
+Liberation Serif
+Manrope
+Microsoft YaHei
+Montserrat
+Nunito
+Open Sans
+Palatino
+Palatino Linotype
+PingFang SC
+Playfair Display
+Poppins
+Public Sans
+Roboto
+Segoe UI
+Segoe UI Symbol
+SF Pro
+SimHei
+SimSun
+Source Sans Pro
+Symbol
+Tahoma
+Times New Roman
+Times-Bold
+Times-BoldItalic
+Times-Italic
+Times-Roman
+Trebuchet MS
+Verdana
+ZapfDingbats

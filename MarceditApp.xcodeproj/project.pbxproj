@@ -1,0 +1,387 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		UITF001 /* TestRunner.swift in Sources */            = {isa = PBXBuildFile; fileRef = UITR001; };
+		UITF002 /* TestHelpers.swift in Sources */           = {isa = PBXBuildFile; fileRef = UITR002; };
+		UITF003 /* PDFVerifier.swift in Sources */           = {isa = PBXBuildFile; fileRef = UITR003; };
+		UITF004 /* TestCorpus.swift in Sources */            = {isa = PBXBuildFile; fileRef = UITR004; };
+		UITF005 /* RealWorldEditTests.swift in Sources */    = {isa = PBXBuildFile; fileRef = UITR005; };
+		UITF006 /* SelectionAccuracyTests.swift in Sources */= {isa = PBXBuildFile; fileRef = UITR006; };
+		UITF007 /* WorkflowTests.swift in Sources */         = {isa = PBXBuildFile; fileRef = UITR007; };
+		UITF008 /* SidebarTests.swift in Sources */          = {isa = PBXBuildFile; fileRef = UITR008; };
+		UITF009 /* DocumentControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UITR009; };
+		UITF010 /* KeyboardShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UITR010; };
+		UITF011 /* ZoomControlTests.swift in Sources */      = {isa = PBXBuildFile; fileRef = UITR011; };
+		UITF012 /* AccessibilityAuditTests.swift in Sources */= {isa = PBXBuildFile; fileRef = UITR012; };
+		UITF013 /* VisualVerifier.swift in Sources */        = {isa = PBXBuildFile; fileRef = UITR013; };
+		UITF014 /* VisualReport.swift in Sources */          = {isa = PBXBuildFile; fileRef = UITR014; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		PROXY001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = ROOTOBJ001;
+			proxyType = 1;
+			remoteGlobalIDString = TARGET001;
+			remoteInfo = Marcedit;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		APP001   /* Marcedit.app */                    = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Marcedit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		TESTTARGETREF /* MarceditUITests.xctest */     = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarceditUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		UITR001 /* TestRunner.swift */                 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestRunner.swift;             sourceTree = "<group>"; };
+		UITR002 /* TestHelpers.swift */                = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHelpers.swift;            sourceTree = "<group>"; };
+		UITR003 /* PDFVerifier.swift */                = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFVerifier.swift;            sourceTree = "<group>"; };
+		UITR004 /* TestCorpus.swift */                 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestCorpus.swift;             sourceTree = "<group>"; };
+		UITR005 /* RealWorldEditTests.swift */         = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealWorldEditTests.swift;     sourceTree = "<group>"; };
+		UITR006 /* SelectionAccuracyTests.swift */     = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionAccuracyTests.swift; sourceTree = "<group>"; };
+		UITR007 /* WorkflowTests.swift */              = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowTests.swift;          sourceTree = "<group>"; };
+		UITR008 /* SidebarTests.swift */               = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarTests.swift;           sourceTree = "<group>"; };
+		UITR009 /* DocumentControlsTests.swift */      = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentControlsTests.swift;  sourceTree = "<group>"; };
+		UITR010 /* KeyboardShortcutTests.swift */      = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcutTests.swift;  sourceTree = "<group>"; };
+		UITR011 /* ZoomControlTests.swift */           = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZoomControlTests.swift;       sourceTree = "<group>"; };
+		UITR012 /* AccessibilityAuditTests.swift */    = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuditTests.swift; sourceTree = "<group>"; };
+		UITR013 /* VisualVerifier.swift */              = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualVerifier.swift;          sourceTree = "<group>"; };
+		UITR014 /* VisualReport.swift */                = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualReport.swift;            sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		MAINGROUP = {
+			isa = PBXGroup;
+			children = (
+				UITESTGROUP,
+				PRODUCTSGROUP,
+			);
+			sourceTree = "<group>";
+		};
+		PRODUCTSGROUP /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				APP001,
+				TESTTARGETREF,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		UITESTGROUP /* MarceditUITestsUITests */ = {
+			isa = PBXGroup;
+			children = (
+				UITR001,
+				UITR002,
+				UITR003,
+				UITR004,
+				UITR005,
+				UITR006,
+				UITR007,
+				UITR008,
+				UITR009,
+				UITR010,
+				UITR011,
+				UITR012,
+				UITR013,
+				UITR014,
+			);
+			path = "MarceditUITests/MarceditUITestsUITests";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		TARGET001 /* Marcedit */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CONFIGLIST001;
+			buildPhases = (
+				SPMPHASE001 /* Build via Swift Package Manager */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Marcedit;
+			productName = Marcedit;
+			productReference = APP001;
+			productType = "com.apple.product-type.application";
+		};
+		TESTTARGET001 /* MarceditUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TESTCONFIGLIST;
+			buildPhases = (
+				TESTSRCROOT001 /* Write SRCROOT for test corpus lookup */,
+				TESTSOURCES001,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TESTDEP001,
+			);
+			name = MarceditUITests;
+			productName = MarceditUITests;
+			productReference = TESTTARGETREF;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		ROOTOBJ001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					TESTTARGET001 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = TARGET001;
+					};
+				};
+			};
+			buildConfigurationList = PROJECTCONFIGLIST;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = MAINGROUP;
+			packageReferences = (
+			);
+			productRefGroup = PRODUCTSGROUP;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				TARGET001,
+				TESTTARGET001,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		SPMPHASE001 /* Build via Swift Package Manager */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Package.swift",
+				"$(SRCROOT)/Package.resolved",
+				"$(SRCROOT)/requirements.txt",
+				"$(SRCROOT)/Sources",
+			);
+			name = "Build via Swift Package Manager";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/MacOS/$(PRODUCT_NAME)",
+				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/Marcedit.icns",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n\nCONFIG=\"debug\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  CONFIG=\"release\"\nfi\n\n# Build Swift package\ncd \"$SRCROOT\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  swift build --configuration \"$CONFIG\" --arch arm64\nelse\n  swift build --configuration \"$CONFIG\"\nfi\n\n# Assemble app bundle\nAPP_DIR=\"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\nMACOS_DIR=\"$APP_DIR/Contents/MacOS\"\nRES_DIR=\"$APP_DIR/Contents/Resources\"\n\nmkdir -p \"$MACOS_DIR\" \"$RES_DIR\"\n\n# Copy binary\ncp \"$SRCROOT/.build/$CONFIG/Marcedit\" \"$MACOS_DIR/Marcedit\"\n\n# Copy resource bundle if present\nBUNDLE=\"$SRCROOT/.build/$CONFIG/Marcedit_Marcedit.bundle\"\nif [ -d \"$BUNDLE\" ]; then\n  rm -rf \"$RES_DIR/Marcedit_Marcedit.bundle\"\n  cp -R \"$BUNDLE\" \"$RES_DIR/Marcedit_Marcedit.bundle\"\n  find \"$RES_DIR/Marcedit_Marcedit.bundle\" -name \"__pycache__\" -type d -prune -exec rm -rf {} +\n  find \"$RES_DIR/Marcedit_Marcedit.bundle\" -name \".DS_Store\" -type f -delete\nfi\n\n# Finder and Launch Services require an app-level .icns file.\nICON_SRC=\"$SRCROOT/Sources/Marcedit/Assets.xcassets/AppIcon.appiconset\"\nICONSET_TMP=\"$DERIVED_FILE_DIR/Marcedit.iconset\"\nif [ -d \"$ICON_SRC\" ]; then\n  rm -rf \"$ICONSET_TMP\"\n  mkdir -p \"$ICONSET_TMP\"\n  cp \"$ICON_SRC\"/icon_*.png \"$ICONSET_TMP\"/\n  iconutil -c icns \"$ICONSET_TMP\" -o \"$RES_DIR/Marcedit.icns\"\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleIconFile Marcedit\" \"$APP_DIR/Contents/Info.plist\" 2>/dev/null || \\\n    /usr/libexec/PlistBuddy -c \"Add :CFBundleIconFile string Marcedit\" \"$APP_DIR/Contents/Info.plist\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  SIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-$CODE_SIGN_IDENTITY}\"\n  if [ -z \"$SIGN_IDENTITY\" ]; then\n    SIGN_IDENTITY=\"-\"\n  fi\n\n  sign_code() {\n    if [ \"$SIGN_IDENTITY\" = \"-\" ]; then\n      codesign --force --sign \"$SIGN_IDENTITY\" --options runtime --timestamp=none \"$1\"\n    else\n      codesign --force --sign \"$SIGN_IDENTITY\" --options runtime --timestamp \"$1\"\n    fi\n  }\n\n  find \"$APP_DIR\" -type f \\( -name \"*.dylib\" -o -name \"*.so\" \\) -print | while IFS= read -r CODE_FILE; do\n    sign_code \"$CODE_FILE\"\n  done\n\n  find \"$APP_DIR\" -type d -name \"*.framework\" -print | sort -r | while IFS= read -r FRAMEWORK_DIR; do\n    sign_code \"$FRAMEWORK_DIR\"\n  done\nfi\n\necho \"SPM build complete → $MACOS_DIR/Marcedit\"\n";
+		};
+		TESTSRCROOT001 /* Write SRCROOT for test corpus lookup */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Write SRCROOT for test corpus lookup";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Write the source root path to a temp file so the test process can find\n# the corpus PDFs at runtime (the test process has no access to Xcode build vars).\nprintf '%s' \"$SRCROOT\" > /tmp/marcedit_uitest_srcroot.txt\necho \"[TestSetup] Wrote SRCROOT=$SRCROOT to /tmp/marcedit_uitest_srcroot.txt\"\n\n# Copy the UI test corpus to /tmp so the test runner process (sandboxed from\n# ~/Documents) can enumerate it without hitting macOS privacy restrictions.\nCORPUS_SRC=\"$SRCROOT/tests/ui_corpus/cases\"\nCORPUS_DST=\"/tmp/marcedit_uitest_corpus\"\nif [ -d \"$CORPUS_SRC\" ]; then\n  rm -rf \"$CORPUS_DST\"\n  cp -R \"$CORPUS_SRC\" \"$CORPUS_DST\"\n  echo \"[TestSetup] Copied corpus to $CORPUS_DST\"\nelse\n  echo \"[TestSetup] WARNING: corpus not found at $CORPUS_SRC\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		TESTSOURCES001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				UITF001 /* TestRunner.swift in Sources */,
+				UITF002 /* TestHelpers.swift in Sources */,
+				UITF003 /* PDFVerifier.swift in Sources */,
+				UITF004 /* TestCorpus.swift in Sources */,
+				UITF005 /* RealWorldEditTests.swift in Sources */,
+				UITF006 /* SelectionAccuracyTests.swift in Sources */,
+				UITF007 /* WorkflowTests.swift in Sources */,
+				UITF008 /* SidebarTests.swift in Sources */,
+				UITF009 /* DocumentControlsTests.swift in Sources */,
+				UITF010 /* KeyboardShortcutTests.swift in Sources */,
+				UITF011 /* ZoomControlTests.swift in Sources */,
+				UITF012 /* AccessibilityAuditTests.swift in Sources */,
+				UITF013 /* VisualVerifier.swift in Sources */,
+				UITF014 /* VisualReport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		TESTDEP001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = TARGET001;
+			targetProxy = PROXY001;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		PROJDBG001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		PROJREL001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		APPDBG001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sources/Marcedit/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.marclaw.Marcedit";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		APPREL001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = Sources/Marcedit/Marcedit.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sources/Marcedit/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.marclaw.Marcedit";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		TESTDBG001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.marcedit.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = Marcedit;
+			};
+			name = Debug;
+		};
+		TESTREL001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.marcedit.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = Marcedit;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		PROJECTCONFIGLIST /* Build configuration list for PBXProject "MarceditApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				PROJDBG001 /* Debug */,
+				PROJREL001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CONFIGLIST001 /* Build configuration list for PBXNativeTarget "Marcedit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				APPDBG001 /* Debug */,
+				APPREL001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		TESTCONFIGLIST /* Build configuration list for PBXNativeTarget "MarceditUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TESTDBG001 /* Debug */,
+				TESTREL001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = ROOTOBJ001;
+}

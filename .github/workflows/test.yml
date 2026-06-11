@@ -1,0 +1,112 @@
+name: Marcedit CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  python-tests:
+    name: Python Unit Tests
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python3 -m pip install --user -r requirements-lock.txt pytest pytest-cov
+
+    - name: Verify vendored runtime dependency lock
+      run: |
+        python3 Scripts/verify_runtime_dependencies.py
+
+    - name: Audit vendored runtime dependencies
+      run: |
+        python3 -m venv "$RUNNER_TEMP/marcedit-audit"
+        "$RUNNER_TEMP/marcedit-audit/bin/python" -m pip install pip-audit
+        "$RUNNER_TEMP/marcedit-audit/bin/pip-audit" --path Sources/Marcedit/python_site --strict
+
+    - name: Run curated Python tests
+      run: |
+        python3 -m pytest \
+          tests/test_editor_core.py \
+          tests/test_reflow_synthesizer.py \
+          tests/test_performance_regression.py \
+          tests/test_week6_collision.py \
+          tests/test_week6_unicode.py \
+          tests/test_security.py \
+          -v --tb=short
+
+    - name: Generate coverage report
+      run: |
+        python3 -m pytest \
+          tests/test_editor_core.py \
+          tests/test_reflow_synthesizer.py \
+          tests/test_performance_regression.py \
+          tests/test_week6_collision.py \
+          tests/test_week6_unicode.py \
+          tests/test_security.py \
+          --cov=Sources/Marcedit/python_site/editor_pkg \
+          --cov-report=xml \
+          --cov-report=term
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+
+  macos-build:
+    name: macOS Build
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build application scheme
+      run: |
+        xcodebuild build -scheme MarceditUITests -destination 'platform=macOS'
+
+    - name: Build and verify release security posture
+      run: |
+        xcodebuild build \
+          -scheme MarceditUITests \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          -derivedDataPath "$PWD/build/DerivedData"
+        python3 Scripts/verify_release_security.py \
+          --app "$PWD/build/DerivedData/Build/Products/Release/Marcedit.app"
+
+  archive-dry-run:
+    name: Release Archive Dry Run
+    runs-on: macos-latest
+    needs: [python-tests, macos-build]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Archive unsigned app
+      run: |
+        xcodebuild archive \
+          -scheme MarceditUITests \
+          -destination 'generic/platform=macOS' \
+          -archivePath "$PWD/build/Marcedit.xcarchive" \
+          CODE_SIGNING_ALLOWED=NO
+        test -d "$PWD/build/Marcedit.xcarchive/Products/Applications/Marcedit.app"
+
+    - name: Upload archive artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: marcedit-unsigned-archive
+        path: |
+          build/Marcedit.xcarchive

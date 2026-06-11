@@ -1,0 +1,12 @@
+{
+  "id": "003_split_runs",
+  "targetText": "Hello World!",
+  "clickNormX": 0.15,
+  "clickNormY": 0.09,
+  "replacement": "Joined text",
+  "expectedOutputText": "Joined text",
+  "expectedFont": null,
+  "pageIndex": 0,
+  "truncatedText": "Hello ",
+  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/003_split_runs/input.pdf"
+}

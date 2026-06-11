@@ -1,0 +1,4 @@
+-r runtime-requirements-lock.txt
+
+# Test/report harness dependency. Not vendored into the app runtime.
+reportlab==4.4.10

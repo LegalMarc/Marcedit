@@ -1,0 +1,29 @@
+{
+  "_comment": "Font mapping: proprietary fonts to bundled OSS equivalents",
+  "_note": "Build TUI scans assets/fonts/ for all .ttf/.otf files",
+  "mappings": {
+    "Arial": "LiberationSans-Regular.ttf",
+    "Arial-Bold": "LiberationSans-Bold.ttf",
+    "Arial-Italic": "LiberationSans-Italic.ttf",
+    "Arial-BoldItalic": "LiberationSans-BoldItalic.ttf",
+    "Helvetica": "LiberationSans-Regular.ttf",
+    "Helvetica-Bold": "LiberationSans-Bold.ttf",
+    "Helvetica-Oblique": "LiberationSans-Italic.ttf",
+    "Times New Roman": "LiberationSerif-Regular.ttf",
+    "TimesNewRoman": "LiberationSerif-Regular.ttf",
+    "Times New Roman-Bold": "LiberationSerif-Bold.ttf",
+    "Times New Roman-Italic": "LiberationSerif-Italic.ttf",
+    "Times": "LiberationSerif-Regular.ttf",
+    "Times-Bold": "LiberationSerif-Bold.ttf",
+    "Times-Italic": "LiberationSerif-Italic.ttf",
+    "Courier New": "LiberationMono-Regular.ttf",
+    "CourierNew": "LiberationMono-Regular.ttf",
+    "Courier New-Bold": "LiberationMono-Bold.ttf",
+    "Courier": "LiberationMono-Regular.ttf",
+    "Courier-Bold": "LiberationMono-Bold.ttf",
+    "Calibri": "Carlito/Carlito-Regular.ttf",
+    "Calibri-Bold": "Carlito/Carlito-Bold.ttf",
+    "Calibri-Italic": "Carlito/Carlito-Italic.ttf",
+    "Calibri-BoldItalic": "Carlito/Carlito-BoldItalic.ttf"
+  }
+}

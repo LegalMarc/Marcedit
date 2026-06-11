@@ -1,0 +1,109 @@
+# Xcode
+DerivedData/
+*.xcworkspace
+*.xcuserdata
+*.xccheckout
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+
+# Swift Package Manager
+.build/
+Packages/
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Archives
+*.xcarchive
+
+# Logs
+*.log
+
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE Helpers
+*.swp
+*.swo
+.idea/
+*.orig
+
+# Temporary files
+*.tmp
+*.bak
+
+# Output bundles
+*.ipa
+*.app
+*.dSYM.zip
+*.dSYM
+
+# Crash reports
+*.crash
+
+# Xcode Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Unit test coverage
+*.gcda
+
+# SwiftPM automatic indexing
+.swiftpm/
+
+# Flutter (if ever integrated)
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Artifacts and Logs
+Artifacts/
+ignored-resources/
+# Note: ignored-resources/ contains sensitive test PDFs and all build outputs - NEVER commit
+build/
+release/
+
+# Root-level build / test output files (should always go to ignored-resources/)
+# Anchored to root (/) so they don't accidentally exclude source assets
+/*.pdf
+/*.dmg
+/bulk_visual_test_report.pdf
+/visual_verification_report*.pdf
+/diagnostic_report.json
+/real_world_test_results/
+/*.scpt
+
+# Finder / macOS duplicate copies (e.g. "Foo (1).swift" created by drag-copy)
+# These must never enter the source tree — SwiftPM globs the target dir and
+# would compile them, producing duplicate @main / redeclaration errors (C1).
+*\ ([0-9]).swift
+*\ ([0-9]).py
+*\ ([0-9]).json
+*\ ([0-9][0-9]).swift
+*\ ([0-9][0-9]).py
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+tests/visual_harness/output/
+tests/visual_harness/automated_output/
+tests/visual_harness/diagnostic_output/
+tests/visual_harness/*.pdf
+tests/visual_edit_harness_report/
+/tmp/
+
+# Local Claude Code agent config
+.claude/

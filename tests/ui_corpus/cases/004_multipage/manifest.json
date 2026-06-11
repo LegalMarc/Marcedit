@@ -1,0 +1,11 @@
+{
+  "id": "004_multipage",
+  "targetText": "Page two content",
+  "clickNormX": 0.2,
+  "clickNormY": 0.09,
+  "replacement": "Edited page two",
+  "expectedOutputText": "Edited page two",
+  "expectedFont": null,
+  "pageIndex": 1,
+  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/004_multipage/input.pdf"
+}

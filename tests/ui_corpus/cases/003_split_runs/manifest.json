@@ -8,5 +8,5 @@
   "expectedFont": null,
   "pageIndex": 0,
   "truncatedText": "Hello ",
-  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/003_split_runs/input.pdf"
+  "pdfPath": "tests/ui_corpus/cases/003_split_runs/input.pdf"
 }

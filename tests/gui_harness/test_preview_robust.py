@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import interactions
 
 APP_NAME = "Marcedit"
-APP_PATH = "/Users/mhm/Documents/Dev/Marcedit/.build/release/Marcedit"
+APP_PATH = ".build/release/Marcedit"
 MODIFIED_TEXT = "PREVIEW_TEST_12345"
 
 

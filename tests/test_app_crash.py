@@ -18,7 +18,7 @@ YELLOW = '\033[1;33m'
 BLUE = '\033[0;34m'
 NC = '\033[0m'
 
-PROJECT_ROOT = Path("/Users/mhm/Documents/Dev/Marcedit")
+PROJECT_ROOT = Path(".")
 APP_BUNDLE = PROJECT_ROOT / "ignored-resources" / "Marcedit.app"
 TEST_PDF = PROJECT_ROOT / "sample-files" / "test_document.pdf"
 

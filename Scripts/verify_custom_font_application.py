@@ -4,7 +4,7 @@ import os
 import fitz
 
 # Setup path to import core
-sys.path.insert(0, '/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site')
+sys.path.insert(0, 'Sources/Marcedit/python_site')
 from editor_pkg import core
 
 TEST_PDF = "test_custom_font.pdf"

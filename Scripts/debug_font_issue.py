@@ -1,10 +1,10 @@
 
 import sys
-sys.path.insert(0, '/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site')
+sys.path.insert(0, 'Sources/Marcedit/python_site')
 import fitz
 import os
 
-pdf_path = "/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files/billing-statement-invoice.pdf"
+pdf_path = "ignored-resources/sample-files/billing-statement-invoice.pdf"
 doc = fitz.open(pdf_path)
 page = doc[0]
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Debug script to investigate the font glyph issue."""
 import sys
-sys.path.insert(0, '/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site')
+sys.path.insert(0, 'Sources/Marcedit/python_site')
 import fitz
 
-pdf_path = "/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files/billing-statement-invoice.pdf"
+pdf_path = "ignored-resources/sample-files/billing-statement-invoice.pdf"
 target_text = "COMMERCIAL"
 replacement_text = "CUMMERCIAL"  # O -> U
 

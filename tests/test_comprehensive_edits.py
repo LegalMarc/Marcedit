@@ -14,7 +14,7 @@ import tempfile
 import shutil
 
 # Add the real application's python_site
-sys.path.insert(0, '/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site')
+sys.path.insert(0, 'Sources/Marcedit/python_site')
 
 try:
     from editor_pkg import core
@@ -23,7 +23,7 @@ except ImportError as e:
     print(f"ERROR: Failed to import editor_pkg or fitz: {e}")
     sys.exit(1)
 
-SAMPLE_DIR = pathlib.Path("/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files")
+SAMPLE_DIR = pathlib.Path("ignored-resources/sample-files")
 OUTPUT_DIR = pathlib.Path("/tmp/marcedit_test_results")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -9,7 +9,7 @@ This guide gets you running with the new architecture immediately.
 ## Step 1: Build the Project (30 seconds)
 
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 swift build
 ```
 

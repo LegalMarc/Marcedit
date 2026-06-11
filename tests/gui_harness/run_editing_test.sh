@@ -17,7 +17,7 @@ echo ""
 echo "Starting test in 3 seconds..."
 sleep 3
 
-cd /Users/mhm/Documents/Dev/Marcedit
+cd .
 python3 -m tests.gui_harness.live_editing_test
 
 echo ""

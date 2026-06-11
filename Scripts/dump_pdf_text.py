@@ -4,7 +4,7 @@ Diagnostic script to dump PDF content stream text.
 Run: python3 dump_pdf_text.py /path/to/file.pdf [page_number]
 """
 import sys
-sys.path.insert(0, '/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site')
+sys.path.insert(0, 'Sources/Marcedit/python_site')
 
 import pikepdf
 from pikepdf import Operator

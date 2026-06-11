@@ -603,7 +603,7 @@ if __name__ == '__main__':
         pdf_path = sys.argv[1]
     else:
         # Try to find a sample PDF
-        sample_dir = Path('/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files-marcedit')
+        sample_dir = Path('ignored-resources/sample-files-marcedit')
         if sample_dir.exists():
             pdfs = list(sample_dir.glob('*.pdf'))
             if pdfs:

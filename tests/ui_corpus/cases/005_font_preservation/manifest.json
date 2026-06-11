@@ -7,5 +7,5 @@
   "expectedOutputText": "New Bold Text",
   "expectedFont": "Helvetica-Bold",
   "pageIndex": 0,
-  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/005_font_preservation/input.pdf"
+  "pdfPath": "tests/ui_corpus/cases/005_font_preservation/input.pdf"
 }

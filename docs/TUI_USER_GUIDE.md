@@ -6,7 +6,7 @@
 ## 🎯 QUICK START
 
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 python3 build_tui.py
 ```
 
@@ -109,7 +109,7 @@ python3 build_tui.py
 ```
 Building Release configuration with SwiftPM...
 ✓ Building Release completed successfully!
-✓ App Bundle ready at: /Users/mhm/Documents/Dev/Marcedit/ignored-resources/Marcedit.app
+✓ App Bundle ready at: ignored-resources/Marcedit.app
 Version 0.6.42
 ```
 

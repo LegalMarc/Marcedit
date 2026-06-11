@@ -46,7 +46,7 @@ print("created")
 
 def launch_app_with_pdf(pdf_path):
     """Launch Marcedit with a specific PDF."""
-    app_path = "/Users/mhm/Documents/Dev/Marcedit/.build/release/Marcedit"
+    app_path = ".build/release/Marcedit"
 
     # Check if app exists
     if not os.path.exists(app_path):

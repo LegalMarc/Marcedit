@@ -13,7 +13,7 @@ final class EditingWorkflowTests: XCTestCase {
     var app: XCUIApplication!
 
     // Default test PDF path
-    let defaultTestPDFPath = "/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files-marcedit/15425215.pdf"
+    let defaultTestPDFPath = "ignored-resources/sample-files-marcedit/15425215.pdf"
 
     override func setUp() {
         super.setUp()

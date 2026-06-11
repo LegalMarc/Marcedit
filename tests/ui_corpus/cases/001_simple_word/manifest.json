@@ -7,5 +7,5 @@
   "expectedOutputText": "Hi there",
   "expectedFont": null,
   "pageIndex": 0,
-  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/001_simple_word/input.pdf"
+  "pdfPath": "tests/ui_corpus/cases/001_simple_word/input.pdf"
 }

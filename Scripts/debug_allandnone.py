@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Debug script to investigate the AllAndNone font glyph issue."""
 import sys
-sys.path.insert(0, '/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site')
+sys.path.insert(0, 'Sources/Marcedit/python_site')
 import fitz
 
-pdf_path = "/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files/Foreign Package Policy.pdf"
+pdf_path = "ignored-resources/sample-files/Foreign Package Policy.pdf"
 
 print(f"=== Analyzing: {pdf_path} ===")
 

@@ -21,7 +21,7 @@ sys.path.insert(0, python_site)
 from editor_pkg import core
 
 # Sample files directory
-SAMPLE_DIR = "/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files-marcedit"
+SAMPLE_DIR = "ignored-resources/sample-files-marcedit"
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ignored-resources", "real_world_test_results")
 
 

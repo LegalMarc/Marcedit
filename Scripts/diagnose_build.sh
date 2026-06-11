@@ -6,7 +6,7 @@ echo "Marcedit Build Diagnostics"
 echo "========================================"
 echo ""
 
-PROJECT_ROOT="/Users/mhm/Documents/Dev/Marcedit"
+PROJECT_ROOT="."
 BUILD_DIR="$PROJECT_ROOT/ignored-resources"
 APP_BUNDLE="$BUILD_DIR/Marcedit.app"
 

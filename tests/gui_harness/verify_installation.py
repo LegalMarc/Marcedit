@@ -72,7 +72,7 @@ except ImportError:
 
 # Check sample PDFs
 print("\n4. Checking for sample PDFs...")
-sample_dir = Path('/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files-marcedit')
+sample_dir = Path('ignored-resources/sample-files-marcedit')
 if sample_dir.exists():
     pdfs = list(sample_dir.glob('*.pdf'))
     if pdfs:

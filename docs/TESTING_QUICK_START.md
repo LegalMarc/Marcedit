@@ -7,20 +7,20 @@
 
 ### Option 1: TUI Menu (Recommended)
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 python3 build_tui.py
 # Select option 8 (Run all pytest tests)
 ```
 
 ### Option 2: Direct pytest
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 pytest tests/ -v
 ```
 
 ### Option 3: CI Script
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 ./ci_test.sh
 ```
 
@@ -146,8 +146,8 @@ pip3 install --user PyMuPDF
 
 ### "ImportError: No module named 'editor_pkg'"
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
-export PYTHONPATH="/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site:$PYTHONPATH"
+cd /path/to/Marcedit
+export PYTHONPATH="Sources/Marcedit/python_site:$PYTHONPATH"
 pytest tests/ -v
 ```
 

@@ -7,5 +7,5 @@
   "expectedOutputText": "Edited page two",
   "expectedFont": null,
   "pageIndex": 1,
-  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/004_multipage/input.pdf"
+  "pdfPath": "tests/ui_corpus/cases/004_multipage/input.pdf"
 }

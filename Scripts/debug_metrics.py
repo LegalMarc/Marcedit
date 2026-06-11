@@ -2,7 +2,7 @@
 import sys
 import fitz
 
-pdf_path = '/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files/billing-statement-invoice.pdf'
+pdf_path = 'ignored-resources/sample-files/billing-statement-invoice.pdf'
 font_name_fragment = "Calibri"
 
 print(f"PyMuPDF Version: {fitz.version}")

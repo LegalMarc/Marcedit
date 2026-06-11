@@ -12,7 +12,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import interactions
 
-APP_PATH = "/Users/mhm/Documents/Dev/Marcedit/.build/Marcedit.app/Contents/MacOS/Marcedit"
+APP_PATH = ".build/Marcedit.app/Contents/MacOS/Marcedit"
 APP_NAME = "Marcedit"
 ORIGINAL_TEXT = "CLICK_HERE_TO_EDIT"
 MODIFIED_TEXT = "MODIFIED_BY_TEST"

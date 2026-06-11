@@ -25,7 +25,7 @@ final class EditingWorkflowUITests: XCTestCase {
     var app: XCUIApplication!
 
     // Default test PDF path - can be overridden per test
-    let defaultTestPDFPath = "/Users/mhm/Documents/Dev/Marcedit/ignored-resources/sample-files-marcedit/15425215.pdf"
+    let defaultTestPDFPath = "ignored-resources/sample-files-marcedit/15425215.pdf"
 
     /// Check if we're running in a proper UI testing environment
     /// XCUITests require a UI Testing target which Swift Package Manager doesn't support

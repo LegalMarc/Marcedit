@@ -45,7 +45,7 @@ python3 build_tui.py
 ```
 Running all pytest tests...
 Using Python: Bundled (Debug App)
-Path: /Users/mhm/Documents/Dev/Marcedit/ignored-resources/Debug/Marcedit.app/Contents/Resources/python/bin/python3
+Path: ignored-resources/Debug/Marcedit.app/Contents/Resources/python/bin/python3
 
 ✓ test_none_page_returns_none
 ✓ test_empty_rect_returns_none
@@ -112,7 +112,7 @@ TOTAL                                              820     18    98%
 
 Coverage report generated:
   Terminal: See above
-  HTML: /Users/mhm/Documents/Dev/Marcedit/htmlcov/index.html
+  HTML: htmlcov/index.html
 ```
 
 **HTML Report**: Open `htmlcov/index.html` in a browser for detailed coverage visualization
@@ -295,14 +295,14 @@ The build system intelligently finds the best Python interpreter:
 **When app is built**:
 ```
 Using Python: Bundled (Debug App)
-Path: /Users/mhm/Documents/Dev/Marcedit/ignored-resources/Debug/Marcedit.app/Contents/Resources/python/bin/python3
+Path: ignored-resources/Debug/Marcedit.app/Contents/Resources/python/bin/python3
 ```
 
 **When app is not built**:
 ```
 ⚠ Warning: App not built. Using local .venv which may not match App behavior.
 Using Python: Local .venv
-Path: /Users/mhm/Documents/Dev/Marcedit/.venv/bin/python3
+Path: .venv/bin/python3
 ```
 
 ---
@@ -359,8 +359,8 @@ pip3 install --user pytest PyMuPDF pytest-cov
 
 **Solution**: Ensure Python path is set correctly:
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
-export PYTHONPATH="/Users/mhm/Documents/Dev/Marcedit/Sources/Marcedit/python_site:$PYTHONPATH"
+cd /path/to/Marcedit
+export PYTHONPATH="Sources/Marcedit/python_site:$PYTHONPATH"
 pytest tests/ -v
 ```
 
@@ -379,7 +379,7 @@ chmod +x .git/hooks/pre-commit
 
 **Solution**: Ensure tests are run from project root:
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 pytest tests/ --cov=Sources/Marcedit/python_site/editor_pkg
 ```
 

@@ -22,7 +22,7 @@ Since Week 1 focused on architecture and PDFOperationsBridge is stubbed, we can 
 ### 1. Verify Clean Build
 
 ```bash
-cd /Users/mhm/Documents/Dev/Marcedit
+cd /path/to/Marcedit
 swift package clean
 swift build
 ```

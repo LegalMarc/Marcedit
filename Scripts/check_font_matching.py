@@ -10,7 +10,7 @@ sys.path.insert(0, "Sources/Marcedit/python_site")
 try:
     from editor_pkg.core import identify_font
 
-    test_pdf = "/Users/mhm/Documents/Dev/Marcedit/test_text_selection.pdf"
+    test_pdf = "test_text_selection.pdf"
     target_text = "TARGET TEXT LINE 1"
 
     print("Testing font identification...")

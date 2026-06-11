@@ -7,5 +7,5 @@
   "expectedOutputText": "New content here",
   "expectedFont": null,
   "pageIndex": 0,
-  "pdfPath": "/Users/mhm/Documents/Dev/Marcedit/tests/ui_corpus/cases/002_full_line/input.pdf"
+  "pdfPath": "tests/ui_corpus/cases/002_full_line/input.pdf"
 }

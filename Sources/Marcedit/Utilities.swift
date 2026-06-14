@@ -95,7 +95,7 @@ func secureErase(at url: URL) async throws {
         let status = SecRandomCopyBytes(kSecRandomDefault, intSize, &randomBytes)
         if status != errSecSuccess {
             // Degrade gracefully rather than aborting — but log so it's observable.
-            let log = OSLog(subsystem: "com.marcedit.app", category: "SecureErase")
+            let log = OSLog(subsystem: "com.marclaw.Marcedit", category: "SecureErase")
             os_log(.error, log: log, "SecRandomCopyBytes failed (status %d); pass 3 writes zeros", status)
         }
         let random = status == errSecSuccess ? Data(randomBytes) : Data(count: intSize)

@@ -94,7 +94,7 @@ struct DocumentControlsView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(vm.selectedDocID == nil)
-                    .help("Securely erase all files with 3-pass overwrite - leaves NO trace")
+                    .help("Best-effort 3-pass overwrite + delete; see confirmation dialog for APFS/SSD limits")
                     .accessibilityIdentifier("SecureEraseButton")
                     .accessibilityLabel("Secure Erase")
                 }

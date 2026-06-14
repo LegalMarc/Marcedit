@@ -1817,49 +1817,19 @@ final class EditorViewModel: ObservableObject {
             let outputPath = outputURL.path
             let pageNum = pageIndex + 1 // 1-based for Python
             
-            // Flags for font style matching
-            var dict: [String: Any] = [:]
-            dict["manual_size_delta"] = overrides.sizeDelta
-            dict["manual_x_offset"] = overrides.xOffset
-            dict["manual_y_offset"] = overrides.yOffset
-            dict["manual_tracking_delta"] = overrides.trackingDelta
-            if let j = overrides.justification { dict["justification"] = j }
-            // Python reads "manual_font", not "font_name" — use the correct key.
-            if let f = overrides.fontName { dict["manual_font"] = f }
-            if overrides.isBold { dict["is_bold"] = true }
-            if overrides.isItalic { dict["is_italic"] = true }
-            if overrides.skipVisualMatching { dict["skip_visual_matching"] = true }
-            if overrides.smartQuotes { dict["smart_quotes"] = true }
+            // Override-derived wire keys live behind the EditIntent seam.
+            var dict = EditIntent.replacementWireDict(overrides)
+            // View-model / app context, not derivable from the overrides alone:
             if self.allowCollisionOverrun { dict["skip_collision"] = true }
-            // Fill color for redaction (nil = transparent; UI picker in FontOverrideControls)
-            if let fc = overrides.fillColor { dict["fill_color"] = fc }
             // Exhaustive font search: honour the global preference set in app Settings
             if UserDefaults.standard.bool(forKey: "exhaustiveFontSearch") { dict["exhaustive_search"] = true }
 
             // PERF: If Swift's background font search already identified the font, pass it
             // directly so Python can skip its own expensive visual-matching phase.
             // Only applies when the user hasn't manually chosen a different font.
-            // detectedFontName format: "/path/to/font.ttf|PostScriptName" or "system|Name"
-            // Python's manual_font format: "/path/to/font.ttf|PSName" or "helv"/"cour"/"tiro"
-            if overrides.fontName == nil, let detected = self.detectedFontName, !detected.isEmpty {
-                if detected.hasPrefix("system|") {
-                    // Map common system font names to PyMuPDF built-in identifiers
-                    let baseName = String(detected.dropFirst("system|".count))
-                        .components(separatedBy: "-").first ?? ""
-                    let builtins: [String: String] = [
-                        "Helvetica": "helv", "Arial": "helv",
-                        "Times": "tiro",
-                        "Courier": "cour",
-                        "Symbol": "symb",
-                        "ZapfDingbats": "zadb"
-                    ]
-                    if let builtin = builtins[baseName] {
-                        dict["manual_font"] = builtin
-                    }
-                } else if detected.contains("|") {
-                    // "/path/to/font.ttf|PostScriptName" — Python accepts this format directly
-                    dict["manual_font"] = detected
-                }
+            if overrides.fontName == nil, let detected = self.detectedFontName, !detected.isEmpty,
+               let resolved = EditIntent.manualFont(fromDetected: detected) {
+                dict["manual_font"] = resolved
             }
 
             // Run replacement via Python with timeout protection
@@ -2117,15 +2087,10 @@ final class EditorViewModel: ObservableObject {
                     ]
                 }
                 
-                // Prepare overrides
-                var overridesDict: [String: Any]? = nil
-                var dict: [String: Any] = [:]
-                dict["manual_size_delta"] = manualOverrides.sizeDelta
-                dict["manual_x_offset"] = manualOverrides.xOffset
-                dict["manual_y_offset"] = manualOverrides.yOffset
-                dict["manual_tracking_delta"] = manualOverrides.trackingDelta
-                if let j = manualOverrides.justification { dict["justification"] = j }
-                if !dict.isEmpty { overridesDict = dict }
+                // Prepare overrides — block replacement sends only the
+                // positioning subset (per-span fonts carry their own identity).
+                let dict = EditIntent.positioningKeys(manualOverrides)
+                let overridesDict: [String: Any]? = dict.isEmpty ? nil : dict
 
                 // Check cancellation before expensive operation
                 if Task.isCancelled { return }

@@ -7,8 +7,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "Marcedit", targets: ["Marcedit"]),
-        .executable(name: "MarceditPythonService", targets: ["MarceditPythonService"])
+        .executable(name: "Marcedit", targets: ["Marcedit"])
     ],
     dependencies: [
         .package(url: "https://github.com/pvieito/PythonKit.git", from: "0.5.1")
@@ -28,13 +27,6 @@ let package = Package(
                 .copy("python_site"),
                 .copy("Resources")
             ]
-        ),
-        .executableTarget(
-            name: "MarceditPythonService",
-            dependencies: [
-                .product(name: "PythonKit", package: "PythonKit")
-            ],
-            path: "Sources/MarceditPythonService"
         ),
         .testTarget(
             name: "MarceditTests",

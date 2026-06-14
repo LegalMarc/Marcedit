@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct DocumentControlsView: View {
-    @ObservedObject var vm: EditorViewModelV2
+    @ObservedObject var vm: EditorViewModel
     @State private var showingFlattenConfirmation = false
     @State private var showingScrubConfirmation = false
     @State private var showingSecureEraseConfirmation = false

@@ -9,7 +9,7 @@ struct EditLineView: View {
     let onClose: () -> Void
     
     @Environment(\.colorScheme) var colorScheme
-    @EnvironmentObject var vm: EditorViewModelV2 // Access to search state
+    @EnvironmentObject var vm: EditorViewModel // Access to search state
     // NOTE: We use vm.editingText directly instead of local @State
     // This prevents edits from being lost when SwiftUI recreates the view
     

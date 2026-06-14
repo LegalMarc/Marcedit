@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 struct FontControlPanel: View {
-    @ObservedObject var vm: EditorViewModelV2
+    @ObservedObject var vm: EditorViewModel
 
     var body: some View {
         VStack(spacing: 12) {

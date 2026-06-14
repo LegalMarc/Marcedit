@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SidebarView: View {
-    @ObservedObject var vm: EditorViewModelV2
+    @ObservedObject var vm: EditorViewModel
     @State private var isTargeted = false
     
     var body: some View {
@@ -69,7 +69,7 @@ struct SidebarView: View {
 struct FileRow: View {
     let doc: DocumentFile
     let isSelected: Bool
-    @ObservedObject var vm: EditorViewModelV2
+    @ObservedObject var vm: EditorViewModel
     
     var body: some View {
         HStack {

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 // MARK: - Main View
 struct ContentView: View {
-    @StateObject private var vm = EditorViewModelV2()
+    @StateObject private var vm = EditorViewModel()
 
     // Shortcuts State
     @FocusState private var isSidebarFocused: Bool

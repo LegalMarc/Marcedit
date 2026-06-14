@@ -208,7 +208,7 @@ struct ColorPalettePopover: View {
 // MARK: - Updated FontOverrideControls
 
 struct FontOverrideControls: View {
-    @ObservedObject var vm: EditorViewModelV2
+    @ObservedObject var vm: EditorViewModel
     var onOverride: () -> Void
     @State private var showColorPicker = false
     

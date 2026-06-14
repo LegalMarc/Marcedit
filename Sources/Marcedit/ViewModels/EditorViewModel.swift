@@ -1080,21 +1080,59 @@ final class EditorViewModel: ObservableObject {
                 }
             }
             
+            // Capture expected page count from the temp file before replacing
+            let expectedPageCount = PDFDocument(url: current)?.pageCount
+
             // Atomic save: replaces original with current (temp) file safely
-            // This moves the temp file to the original location
+            // A backup is kept until post-write verification passes
+            let backupName = ".marcedit_bak_\(id.uuidString)"
             _ = try FileManager.default.replaceItem(
                 at: original,
                 withItemAt: current,
-                backupItemName: nil,
-                options: shouldPreserve ? [] : .usingNewMetadataOnly, 
+                backupItemName: backupName,
+                options: shouldPreserve ? [] : .usingNewMetadataOnly,
                 resultingItemURL: nil
             )
-            
+
+            // Post-write page-count verification
+            let savedPageCount = PDFDocument(url: original)?.pageCount
+            let backupURL = original.deletingLastPathComponent().appendingPathComponent(backupName)
+
+            // Treat nil page counts as a verification failure — if either PDF was
+            // unreadable, roll back rather than silently accepting an unverified write.
+            let verifyFailed = expectedPageCount == nil || savedPageCount != expectedPageCount
+            if verifyFailed {
+                let expected = expectedPageCount.map(String.init) ?? "unknown"
+                let actual = savedPageCount.map(String.init) ?? "unreadable"
+                logger.error("Save verify failed: expected \(expected) pages, got \(actual). Attempting rollback.")
+                do {
+                    // Use replaceItem for atomic rollback — avoids a gap where neither
+                    // the saved file nor the backup exist (non-atomic remove+move).
+                    _ = try FileManager.default.replaceItem(
+                        at: original,
+                        withItemAt: backupURL,
+                        backupItemName: nil,
+                        options: [],
+                        resultingItemURL: nil
+                    )
+                    self.errorMessage = "Save verification failed (page count mismatch). Your original file has been restored from backup. Please try saving again."
+                } catch {
+                    logger.error("Rollback failed: \(error)")
+                    self.errorMessage = "Save verification failed and rollback also failed. Backup may remain at \(backupURL.path). Do not overwrite the file manually."
+                }
+                return
+            }
+
+            // Verification passed — delete the backup
+            if (try? FileManager.default.removeItem(at: backupURL)) == nil {
+                logger.warning("Could not remove save backup at \(backupURL.path); it will linger in the file's directory")
+            }
+
             doc.isDirty = false
-            doc.currentURL = original 
+            doc.currentURL = original
             documents[idx] = doc
             clearEditHistory()
-            
+
             // Recalculate checksum on save
             calculateChecksum(for: id)
             

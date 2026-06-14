@@ -5,6 +5,7 @@ struct DocumentControlsView: View {
     @State private var showingFlattenConfirmation = false
     @State private var showingScrubConfirmation = false
     @State private var showingSecureEraseConfirmation = false
+    @State private var secureEraseConfirmText = ""
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -196,17 +197,49 @@ struct DocumentControlsView: View {
         } message: {
             Text("This will remove all standard metadata (Title, Author, etc.), XMP data, and perform a deep clean of the file structure.\n\nThis action cannot be undone.")
         }
-        // Confirmation Dialog: Secure Erase
-        .alert("Permanently Delete Original File?", isPresented: $showingSecureEraseConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete Permanently", role: .destructive) {
-                Task {
-                    await vm.secureEraseCurrentDocument()
+        // Confirmation Sheet: Secure Erase (requires typed "DELETE" to proceed)
+        .sheet(isPresented: $showingSecureEraseConfirmation) {
+            secureEraseConfirmText = ""
+        } content: {
+            let path = vm.selectedDocument?.originalURL.path ?? "the selected file"
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Permanently Delete Original File?")
+                    .font(.headline)
+
+                Text("This will permanently delete:\n\n\(path)\n\n…along with any modified copies, temp files, and scrub reports.\n\nNote: On APFS / SSD, overwrite passes cannot guarantee that original data blocks are physically zeroed. For at-rest protection, use FileVault.\n\nThis action cannot be undone.")
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Type DELETE to confirm")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("DELETE", text: $secureEraseConfirmText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body.monospaced())
+                        .autocorrectionDisabled(true)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") {
+                        showingSecureEraseConfirmation = false
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    Button("Delete Permanently", role: .destructive) {
+                        showingSecureEraseConfirmation = false
+                        Task {
+                            await vm.secureEraseCurrentDocument()
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(secureEraseConfirmText != "DELETE")
+                    .tint(secureEraseConfirmText == "DELETE" ? .red : .secondary)
                 }
             }
-        } message: {
-            let path = vm.selectedDocument?.originalURL.path ?? "the selected file"
-            Text("This will permanently delete:\n\n\(path)\n\n…along with any modified copies, temp files, and scrub reports.\n\nNote: On APFS / SSD, overwrite passes cannot guarantee that original data blocks are physically zeroed. For at-rest protection, use FileVault.\n\nThis action cannot be undone.")
+            .padding(24)
+            .frame(minWidth: 420, maxWidth: 520)
         }
         // Menu command receivers (Document menu bar items)
         .onReceive(NotificationCenter.default.publisher(for: .menuVectorFlatten)) { _ in

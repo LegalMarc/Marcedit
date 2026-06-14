@@ -112,39 +112,30 @@ enum CloseActionType {
 
 @MainActor
 final class EditorViewModel: ObservableObject {
-    @Published var documents: [DocumentFile] = []
-    @Published var selectedDocID: UUID?
+    // MARK: - Composed stores (Candidate D)
+    // The coordinator owns three focused stores and re-emits their changes
+    // (see init) so any view observing the coordinator still updates. Forwarding
+    // properties below keep the ~50 orchestration methods and existing call
+    // sites working against the original flat surface; views bind to moved
+    // properties through explicit Binding(get:set:) wrappers.
+    let documentStore = DocumentStore()
+    let editSession = EditSession()
+    let preview = PreviewSession()
+    private var storeCancellables = Set<AnyCancellable>()
+
+    // App / dialog UI state owned by the coordinator itself.
     @Published var showFileImporter = false
     @Published var showUnsavedAlert = false
     @Published var closeActionType: CloseActionType = .quit
     @Published var pendingCloseAction: (() -> Void)?
-    
-    // Derived selected document
-    var selectedDocument: DocumentFile? {
-        get { documents.first(where: { $0.id == selectedDocID }) }
-        set {
-            if let val = newValue {
-                documents = documents.map { $0.id == val.id ? val : $0 }
-            }
-        }
-    }
-    
-    @Published var selectedPDF: PDFDocument?
+
     /// Tracks the URL of the content currently displayed in the PDFView.
-    /// This is updated after replacePages() since PDFDocument.documentURL doesn't change.
     private var displayedContentURL: URL?
-    @Published var pdfViewID = UUID()
-    
-    // Zoom & Scroll Persistence (Bound to PDFView)
-    @Published var currentScaleFactor: CGFloat = 1.0
-    @Published var currentDestination: PDFDestination? = nil
-    
-    // UI State
+
     @Published var errorMessage: String? = nil
     /// Non-fatal scrub warning message to surface as a toast (distinct from errorMessage).
     @Published var scrubWarningMessage: String? = nil
     @Published var lastSavedTime: Date?
-    @Published var showEditSheet = false
     @Published var fontSourceInfo: String? = nil  // Displays font source/substitution info inline
     @Published var isProcessing: Bool = false
     /// True only while a secure erase is running. Distinct from isProcessing so the UI
@@ -153,44 +144,17 @@ final class EditorViewModel: ObservableObject {
     @Published var showScrubReport = false
     private var isReloading: Bool = false  // Track reload state to prevent async update races
     @Published var scrubReportURL: URL? = nil
-    
-    /// Selection mode: "line" for single line, "paragraph" for full text block/cell
-    @Published var selectionMode: String = "line"
-    
-    /// Block editing: array of styled spans when in paragraph mode
-    @Published var editingSpans: [SpanInfo] = []
-    @Published var blockBbox: [Double] = []
-    @Published var selectedTextRange: NSRange = NSRange(location: 0, length: 0)
-    
+
     /// Stores the last scrub report URL per document ID
     var lastScrubReportURLs: [UUID: URL] = [:]
-    /// Stores the last scrub data directory URL per document ID (used by secureErase to find the right dir)
+    /// Stores the last scrub data directory URL per document ID
     var lastScrubDataDirURLs: [UUID: URL] = [:]
-    
-    // Font & Manual Controls
-    @Published var availableFonts: [[String: String]] = []
-    @Published var manualOverrides = ManualOverrides()
+
     @Published var undoStack: [EditHistoryItem] = []
     @Published var redoStack: [EditHistoryItem] = []
-    
     // Legacy single-item history removed in favor of stack
     var lastEdit: EditHistoryItem? { undoStack.last }
-    
-    // Active Editing
-    /// Text to search for in PDF - NEVER mutated during edit session
-    /// Set once when text is selected, used as the target for all replacements
-    @Published var targetTextForReplacement: String = ""
-    /// Alias for ContentView compatibility (same value as targetTextForReplacement)
-    var editingOriginalText: String { targetTextForReplacement }
-    /// User's current edited text (may differ from target)
-    @Published var editingText: String = ""
-    @Published var editingPageIndex: Int = 0
-    @Published var detectedFont: String? = nil
-    @Published var detectedFontName: String? = nil
-    @Published var detectedFontFlags: Int = 0 
-    @Published var originalDetectedFont: String? = nil // Preserved from initial selection
-    @Published var isSearchingFonts: Bool = false // Indicates visual font matching in progress
-    
+
     // MARK: - Preview Status (deterministic collision architecture)
     enum PreviewStatus: Equatable {
         case idle
@@ -207,26 +171,52 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
-    @Published var previewStatus: PreviewStatus = .idle
-    @Published var allowCollisionOverrun: Bool = false
-
-    // Real Preview State (preview = actual replacement, cancel = restore stashed)
-    @Published var isShowingPreview: Bool = false
-    @Published var previewStashedURL: URL? = nil  // URL to restore on Cancel
+    // Coordinator-private preview scratch state (the @Published preview state
+    // lives in `preview`).
     private var previewStashedOriginalText: String? = nil  // Original text to restore on Cancel
-    @Published var previewPendingText: String? = nil  // Text for debounced preview
     private var previewDebounceTask: Task<Void, Never>? = nil
     private var nudgeDebounceTask: Task<Void, Never>? = nil
-    
-    // Interactive Font Search
     private var terminationHandlerRetryCount = 0
-    @Published var searchProgress: Double = 0.0
-    @Published var searchingFontName: String = ""
-    @Published var fontSearchResults: [String: [FontSearchResult]] = [:] // Cache key: originalText
-    
-    // Computed helpers for detected font traits
-    var detectedIsItalic: Bool { (detectedFontFlags & 2) != 0 }
-    var detectedIsBold: Bool { (detectedFontFlags & 16) != 0 }
+
+    // MARK: - Forwarding to composed stores
+    // DocumentStore
+    var documents: [DocumentFile] { get { documentStore.documents } set { documentStore.documents = newValue } }
+    var selectedDocID: UUID? { get { documentStore.selectedDocID } set { documentStore.selectedDocID = newValue } }
+    var selectedDocument: DocumentFile? { get { documentStore.selectedDocument } set { documentStore.selectedDocument = newValue } }
+    var selectedPDF: PDFDocument? { get { documentStore.selectedPDF } set { documentStore.selectedPDF = newValue } }
+    var pdfViewID: UUID { get { documentStore.pdfViewID } set { documentStore.pdfViewID = newValue } }
+    var currentScaleFactor: CGFloat { get { documentStore.currentScaleFactor } set { documentStore.currentScaleFactor = newValue } }
+    var currentDestination: PDFDestination? { get { documentStore.currentDestination } set { documentStore.currentDestination = newValue } }
+
+    // EditSession
+    var showEditSheet: Bool { get { editSession.showEditSheet } set { editSession.showEditSheet = newValue } }
+    var selectionMode: String { get { editSession.selectionMode } set { editSession.selectionMode = newValue } }
+    var editingSpans: [SpanInfo] { get { editSession.editingSpans } set { editSession.editingSpans = newValue } }
+    var blockBbox: [Double] { get { editSession.blockBbox } set { editSession.blockBbox = newValue } }
+    var selectedTextRange: NSRange { get { editSession.selectedTextRange } set { editSession.selectedTextRange = newValue } }
+    var targetTextForReplacement: String { get { editSession.targetTextForReplacement } set { editSession.targetTextForReplacement = newValue } }
+    var editingOriginalText: String { editSession.editingOriginalText }
+    var editingText: String { get { editSession.editingText } set { editSession.editingText = newValue } }
+    var editingPageIndex: Int { get { editSession.editingPageIndex } set { editSession.editingPageIndex = newValue } }
+    var detectedFont: String? { get { editSession.detectedFont } set { editSession.detectedFont = newValue } }
+    var detectedFontName: String? { get { editSession.detectedFontName } set { editSession.detectedFontName = newValue } }
+    var detectedFontFlags: Int { get { editSession.detectedFontFlags } set { editSession.detectedFontFlags = newValue } }
+    var originalDetectedFont: String? { get { editSession.originalDetectedFont } set { editSession.originalDetectedFont = newValue } }
+    var isSearchingFonts: Bool { get { editSession.isSearchingFonts } set { editSession.isSearchingFonts = newValue } }
+    var searchProgress: Double { get { editSession.searchProgress } set { editSession.searchProgress = newValue } }
+    var searchingFontName: String { get { editSession.searchingFontName } set { editSession.searchingFontName = newValue } }
+    var fontSearchResults: [String: [FontSearchResult]] { get { editSession.fontSearchResults } set { editSession.fontSearchResults = newValue } }
+    var availableFonts: [[String: String]] { get { editSession.availableFonts } set { editSession.availableFonts = newValue } }
+    var manualOverrides: ManualOverrides { get { editSession.manualOverrides } set { editSession.manualOverrides = newValue } }
+    var allowCollisionOverrun: Bool { get { editSession.allowCollisionOverrun } set { editSession.allowCollisionOverrun = newValue } }
+    var detectedIsItalic: Bool { editSession.detectedIsItalic }
+    var detectedIsBold: Bool { editSession.detectedIsBold }
+
+    // PreviewSession
+    var previewStatus: PreviewStatus { get { preview.previewStatus } set { preview.previewStatus = newValue } }
+    var isShowingPreview: Bool { get { preview.isShowingPreview } set { preview.isShowingPreview = newValue } }
+    var previewStashedURL: URL? { get { preview.previewStashedURL } set { preview.previewStashedURL = newValue } }
+    var previewPendingText: String? { get { preview.previewPendingText } set { preview.previewPendingText = newValue } }
     
     private var fontDetectionTask: Task<Void, Never>?
     private var fontSearchTask: Task<Void, Never>?
@@ -244,6 +234,17 @@ final class EditorViewModel: ObservableObject {
 
     init(runner: PythonRunnerProtocol? = nil) {
         self.injectedRunner = runner
+
+        // Re-emit composed-store changes (Candidate D) so any view observing
+        // the coordinator still updates when a store mutates.
+        for publisher in [documentStore.objectWillChange,
+                          editSession.objectWillChange,
+                          preview.objectWillChange] {
+            publisher
+                .sink { [weak self] in self?.objectWillChange.send() }
+                .store(in: &storeCancellables)
+        }
+
         Task {
             await fetchFonts()
         }

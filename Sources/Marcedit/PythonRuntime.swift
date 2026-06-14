@@ -1146,6 +1146,10 @@ final class PythonWorkerThread: Thread {
     }
 
     func perform<T>(_ work: @escaping () throws -> T) throws -> T {
+        // Catch main-thread misuse early in debug builds — blocking the main
+        // thread here would freeze the UI.
+        dispatchPrecondition(condition: .notOnQueue(.main))
+
         // If the caller is already on the worker thread, run inline to avoid
         // self-deadlock (enqueuing behind the currently-running task that is
         // itself blocked on the semaphore below).
@@ -1162,7 +1166,17 @@ final class PythonWorkerThread: Thread {
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        // 120-second backstop: the app-level Swift watchdogs (30 s) surface
+        // the timeout to the UI much sooner, but they only cancel the awaiting
+        // Swift Task — they do not interrupt a synchronous Python call already
+        // executing on this worker thread.  Without this timeout the worker
+        // thread blocks permanently on a hung Python operation.
+        let waitResult = semaphore.wait(timeout: .now() + 120)
+        if waitResult == .timedOut {
+            throw NSError(domain: "PythonWorkerThread", code: -2,
+                         userInfo: [NSLocalizedDescriptionKey:
+                            "Python operation timed out after 120 seconds — restart the app if this persists"])
+        }
         guard let result = result else {
             throw NSError(domain: "PythonWorkerThread", code: -1,
                          userInfo: [NSLocalizedDescriptionKey: "Worker thread failed to execute task"])

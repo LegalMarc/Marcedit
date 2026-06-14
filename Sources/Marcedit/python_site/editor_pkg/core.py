@@ -6064,21 +6064,79 @@ def scrub_all_metadata(input_path: str, output_path: str, data_dir: str = None) 
             except Exception:
                 pass
 
-            # Remove annotations (reviewer names, comment text, timestamps).
-            # Use the first_annot / returned-next pattern — delete_annot() returns the
-            # next handle (or None) and invalidates the deleted wrapper, so iterating a
-            # snapshot list would call delete_annot on stale wrappers.
-            try:
-                annot_count = 0
-                for page in doc:
-                    annot = page.first_annot
-                    while annot:
-                        annot = page.delete_annot(annot)
-                        annot_count += 1
-                debug_log.append(f"Removed {annot_count} annotation(s)")
-            except Exception as e:
-                debug_log.append(f"Annotation removal failed: {e}")
-                warnings.append(f"Annotation removal failed: {e}")
+            # Remove annotations, form-field widgets, link annotations, and
+            # per-page /AA actions.  Four distinct leak vectors on multi-page PDFs:
+            #
+            #   1. Annotations (/T author, /Contents body, timestamps) — snapshot
+            #      the list per page so handle-invalidation from delete_annot()
+            #      never aborts processing of subsequent pages.
+            #   2. Form-field widgets — NOT returned by annots()/first_annot;
+            #      require page.widgets() + page.delete_widget().  Catalog
+            #      /AcroForm is nulled below, but per-page widget objects
+            #      survive without this step.
+            #   3. Link annotations — a separate class (URI embeds); require
+            #      page.get_links() + page.delete_link().
+            #   4. Per-page /AA — only the catalog /AA is nulled by the block
+            #      below; each page's own /AA JS actions must be cleared here.
+            #
+            # Per-page isolation: a failure on one page collects a warning but
+            # never aborts the remaining pages.
+            annot_count = 0
+            widget_count = 0
+            link_count = 0
+            for _pg_num, _page in enumerate(doc):
+                # 1. Annotations
+                try:
+                    for _a in list(_page.annots() or []):
+                        try:
+                            _page.delete_annot(_a)
+                            annot_count += 1
+                        except Exception as _e:
+                            warnings.append(
+                                f"Annotation removal failed on page {_pg_num + 1}: {_e}"
+                            )
+                except Exception as _e:
+                    warnings.append(f"Could not list annotations on page {_pg_num + 1}: {_e}")
+
+                # 2. Form-field widgets (/V values + field names)
+                try:
+                    for _w in list(_page.widgets() or []):
+                        try:
+                            _page.delete_widget(_w)
+                            widget_count += 1
+                        except Exception as _e:
+                            warnings.append(
+                                f"Widget removal failed on page {_pg_num + 1}: {_e}"
+                            )
+                except Exception as _e:
+                    warnings.append(f"Could not list widgets on page {_pg_num + 1}: {_e}")
+
+                # 3. Link annotations (embedded /URI values)
+                try:
+                    for _lnk in list(_page.get_links() or []):
+                        try:
+                            _page.delete_link(_lnk)
+                            link_count += 1
+                        except Exception as _e:
+                            warnings.append(
+                                f"Link removal failed on page {_pg_num + 1}: {_e}"
+                            )
+                except Exception as _e:
+                    warnings.append(f"Could not list links on page {_pg_num + 1}: {_e}")
+
+                # 4. Per-page /AA (JavaScript open/close actions) — only null it
+                # when present, so a clean page doesn't gain a spurious "/AA null"
+                # entry (garbage/clean won't strip it back out).
+                try:
+                    if "AA" in (doc.xref_get_keys(_page.xref) or ()):
+                        doc.xref_set_key(_page.xref, "AA", "null")
+                except Exception as _e:
+                    warnings.append(f"Could not clear page /AA on page {_pg_num + 1}: {_e}")
+
+            debug_log.append(
+                f"Removed {annot_count} annotation(s), {widget_count} widget(s),"
+                f" {link_count} link(s) across all pages"
+            )
 
             # Remove catalog-level keys that can carry identifying data.
             # /AcroForm   — form fields with author/app info

@@ -107,3 +107,33 @@ tests/visual_edit_harness_report/
 
 # Local Claude Code agent config
 .claude/
+
+# Local-only notes / reports (e.g. local audit reports) — never commit
+*.local.md
+
+# ── Bundled Python.framework: keep deliberately-stripped libs OUT of git (audit F3)
+# The hardened committed bundle (Python 3.11.15) removed the Tk/Tcl/ncurses/sqlite/
+# itcl GUI+terminal libraries to slim size and attack surface. A local framework
+# reinstall regenerates them as UNTRACKED files; without these rules a `git add -A`
+# would re-bloat the repo and re-introduce the removed libraries. These patterns
+# target only the stripped sub-trees — no tracked stdlib path matches them.
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/Tk.icns
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/Tk.tiff
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/itcl*/
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/tdbc*/
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/thread*/
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/tcl8*/
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/tk8*/
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/sqlite3.*/
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/libtcl*
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/libtk*
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/libncursesw*
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/libformw*
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/libmenuw*
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/libpanelw*
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/tclConfig.sh
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/tclooConfig.sh
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/tkConfig.sh
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/pkgconfig/tcl.pc
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/pkgconfig/tk.pc
+Sources/Marcedit/Frameworks/Python.framework/Versions/*/lib/python*/site-packages/

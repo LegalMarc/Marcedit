@@ -111,3 +111,15 @@
 - **Fully offline** — no internet connection, all processing local
 - Secure metadata scrubbing (3-pass overwrite before deletion)
 - DOD-compliant secure file erasure
+
+## Limitations
+
+### Text replace does not alter underlying image pixels
+
+When you replace or redact text that sits on top of an image (for example, a logo or
+scanned background), Marcedit removes or replaces the text glyphs but does not modify
+the underlying image pixels. The image beneath the text is preserved intact. This is
+intentional for a text editor — it avoids destroying embedded artwork — but it means
+text replace is **not** a substitute for true visual redaction of image content. If you
+need to black out an image region, do so in a dedicated image-editing or redaction tool
+before or after editing the PDF in Marcedit.

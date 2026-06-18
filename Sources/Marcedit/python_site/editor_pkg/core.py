@@ -3219,734 +3219,750 @@ def _handle_multiline_replacement(page, target_text: str, replacement_text: str,
         return False, None
 
 
-@monitor_performance("replace_text_in_pdf")
-def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, replacement_text: str, page_number: int = 1, manual_overrides: dict = None, skip_collision: bool = False, occurrence_index: int | None = None) -> dict:
-    """Replace text in a PDF while preserving original font appearance."""
+
+
+def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
+                               page_number: int = 1,
+                               manual_overrides: dict = None,
+                               skip_collision: bool = False,
+                               occurrence_index: int | None = None,
+                               src_path_hint: str | None = None) -> dict:
+    """Apply a single text replacement to an already-open fitz.Document.
+
+    Performs the same edit logic as ``replace_text_in_pdf`` but does **not**
+    save the document — the caller is responsible for calling ``doc.save()``.
+    This enables batching: open once, apply N edits, save once (O(1) saves).
+
+    Args:
+        doc:              An open ``fitz.Document`` object.
+        target_text:      Text to find and replace.
+        replacement_text: Replacement string.
+        page_number:      1-based page number (default 1).
+        manual_overrides: Optional dict of per-edit overrides.
+        skip_collision:   If True, skip optical collision check.
+        occurrence_index: If set, replace only the Nth occurrence (0-based).
+        src_path_hint:    Original file path, used only for pixmap caching.
+                          Pass ``None`` for docs not loaded from a file path.
+
+    Returns:
+        dict with ``success``, ``modified``, ``count``, ``debug_log`` keys.
+        Never raises; failures are reported in the returned dict.
+    """
     debug_log = []
-    applied_info = {}
-    # Extract skip_collision and occurrence_index from manual_overrides if passed via Swift bridge
-    if manual_overrides and manual_overrides.get('skip_collision'):
-        skip_collision = True
-    if manual_overrides and manual_overrides.get('occurrence_index') is not None:
-        occurrence_index = int(manual_overrides['occurrence_index'])
+    if not target_text or not target_text.strip():
+        return {'success': False, 'modified': False, 'message': 'Target text empty',
+                'debug_log': debug_log}
+
+    # 0. Smart Quotes - only when explicitly requested via manual_overrides
+    if manual_overrides and manual_overrides.get('smart_quotes') and ('"' in replacement_text or "'" in replacement_text):
+        def smarten(text):
+            res, open_d = [], True
+            chars = list(text)
+            for i, char in enumerate(chars):
+                if char == '"':
+                    res.append('\u201c' if open_d else '\u201d')
+                    open_d = not open_d
+                elif char == "'":
+                    prev_alnum = res and res[-1].isalnum()
+                    next_alnum = (i + 1 < len(chars)) and chars[i + 1].isalnum()
+                    if prev_alnum:
+                        # mid-word or post-word: apostrophe (e.g. can't, O'Brien)
+                        res.append('\u2019')
+                    elif next_alnum:
+                        # word-initial elision/decade: 'cause, '90s, 'em \u2192 apostrophe
+                        res.append('\u2019')
+                    else:
+                        # genuinely opening a quotation
+                        res.append('\u2018')
+                else:
+                    res.append(char)
+            return "".join(res)
+        replacement_text = smarten(replacement_text)
+
     try:
-        if not target_text:
-            return {'success': False, 'modified': False, 'message': 'Target text empty', 'debug_log': debug_log}
+        if len(doc) == 0:
+            return {'success': False, 'message': 'PDF has no pages'}
+        if page_number < 1 or page_number > len(doc):
+            return {'success': False, 'message': f'Invalid page {page_number}'}
+        page = doc[page_number - 1]
 
-        # 0. Smart Quotes - only when explicitly requested via manual_overrides
-        # Previously ran unconditionally, which destroyed foot/inch marks (5’10”),
-        # code literals, and apostrophes in names (O’Brien → O’Brien).
-        if manual_overrides and manual_overrides.get('smart_quotes') and ('"' in replacement_text or "'" in replacement_text):
-            def smarten(text):
-                res, open_d = [], True
-                for char in text:
-                    if char == '"': res.append('\u201c' if open_d else '\u201d'); open_d = not open_d
-                    elif char == "'": res.append('\u2019' if res and res[-1].isalnum() else '\u2018')
-                    else: res.append(char)
-                return "".join(res)
-            replacement_text = smarten(replacement_text)
+        # Create diagnostic object to capture search details on failure
+        diagnostic = SearchDiagnostic(target_text, page_number)
+        diagnostic.capture_unicode()
 
-        with fitz.open(input_path) as doc:
-            if len(doc) == 0:
-                return {'success': False, 'message': 'PDF has no pages'}
-            if page_number < 1 or page_number > len(doc):
-                return {'success': False, 'message': f'Invalid page {page_number}'}
-            page = doc[page_number - 1]
+        all_rects = _robust_search(page, target_text, return_all=True, diagnostic=diagnostic)
+        if not all_rects:
+            # Capture page text sample for debugging
+            page_text = page.get_text("text", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+            diagnostic.capture_page_text(page_text)
+            return {
+                'success': False,
+                'modified': False,
+                'message': 'Text not found',
+                'diagnostic': diagnostic.to_dict()
+            }
 
-            # Create diagnostic object to capture search details on failure
-            diagnostic = SearchDiagnostic(target_text, page_number)
-            diagnostic.capture_unicode()
+        # MULTI-LINE CONSOLIDATION: When target contains newlines and we found multiple
+        # rects (one per line), consolidate into a single combined rect to avoid
+        # processing each line separately which causes duplicate replacements.
+        # Only combine rects that are vertically contiguous (within line spacing).
+        is_multiline_target = '\n' in target_text or '\n' in replacement_text
+        if is_multiline_target and len(all_rects) > 1:
+            # Sort rects by vertical position (top to bottom)
+            sorted_rects = sorted(all_rects, key=lambda r: r.y0)
 
-            all_rects = _robust_search(page, target_text, return_all=True, diagnostic=diagnostic)
-            if not all_rects:
-                # Capture page text sample for debugging
-                page_text = page.get_text("text", flags=fitz.TEXT_PRESERVE_WHITESPACE)
-                diagnostic.capture_page_text(page_text)
-                return {
-                    'success': False,
-                    'modified': False,
-                    'message': 'Text not found',
-                    'diagnostic': diagnostic.to_dict()
-                }
+            # Group vertically contiguous rects
+            groups = []
+            current_group = [sorted_rects[0]]
 
-            # MULTI-LINE CONSOLIDATION: When target contains newlines and we found multiple
-            # rects (one per line), consolidate into a single combined rect to avoid
-            # processing each line separately which causes duplicate replacements.
-            # Only combine rects that are vertically contiguous (within line spacing).
-            is_multiline_target = '\n' in target_text or '\n' in replacement_text
-            if is_multiline_target and len(all_rects) > 1:
-                # Sort rects by vertical position (top to bottom)
-                sorted_rects = sorted(all_rects, key=lambda r: r.y0)
+            for rect in sorted_rects[1:]:
+                prev_rect = current_group[-1]
+                # Check if vertically adjacent (within 2x the height of previous rect)
+                vertical_gap = rect.y0 - prev_rect.y1
+                max_gap = prev_rect.height * 2
 
-                # Group vertically contiguous rects
-                groups = []
-                current_group = [sorted_rects[0]]
+                if vertical_gap < max_gap:
+                    current_group.append(rect)
+                else:
+                    groups.append(current_group)
+                    current_group = [rect]
 
-                for rect in sorted_rects[1:]:
+            groups.append(current_group)
+
+            # Combine rects within each group
+            all_rects = []
+            for group in groups:
+                if len(group) > 1:
+                    combined = fitz.Rect(
+                        min(r.x0 for r in group),
+                        min(r.y0 for r in group),
+                        max(r.x1 for r in group),
+                        max(r.y1 for r in group)
+                    )
+                    all_rects.append(combined)
+                else:
+                    all_rects.extend(group)
+
+            debug_log.append(f"Multi-line: consolidated into {len(all_rects)} contiguous groups")
+
+        # SAME-LINE CONSOLIDATION: When search returns multiple rects for a single
+        # text instance (common with small caps, mixed font sizes, or styled text),
+        # merge horizontally-adjacent rects on the same line into one combined rect.
+        # Without this, each span rect would trigger a separate full replacement.
+        #
+        # Implementation note: small-caps text produces rects that interleave at TWO
+        # slightly different y0 positions (e.g., large-caps glyphs at y0=743.52 and
+        # small-caps glyphs at y0=745.98).  If we sort by (y0, x0), all large-caps
+        # rects come before all small-caps rects, creating artificial 34-pt gaps that
+        # the adjacency check cannot bridge.  The fix is to group by VISUAL LINE first
+        # (rects whose y-ranges overlap or are within ½ line-height of each other),
+        # then sort within each visual line by x0.  This interleaves the two glyph
+        # series correctly and allows the adjacency check to work.
+        needs_fragment_consolidation = any(ch.isspace() for ch in target_text.strip())
+
+        if needs_fragment_consolidation and len(all_rects) > 1:
+            # ── Step 1: group rects into visual lines ──────────────────────────
+            # Sort by y0 to walk top-to-bottom.
+            by_y0 = sorted(all_rects, key=lambda r: r.y0)
+            vline_groups = []
+            vline_cur = [by_y0[0]]
+            vline_y1  = by_y0[0].y1
+
+            for r in by_y0[1:]:
+                line_h = max(r.height, vline_cur[0].height)
+                # Belongs to same visual line if it starts before the current
+                # group's bottom edge + ½ line height (handles rects at two
+                # closely-spaced y-positions as well as tight line spacing).
+                if r.y0 < vline_y1 + line_h * 0.5:
+                    vline_cur.append(r)
+                    vline_y1 = max(vline_y1, r.y1)
+                else:
+                    vline_groups.append(vline_cur)
+                    vline_cur = [r]
+                    vline_y1 = r.y1
+            vline_groups.append(vline_cur)
+
+            # ── Step 2: within each visual line, sort by x0 and merge ─────────
+            consolidated = []
+            for vline in vline_groups:
+                vline_sorted = sorted(vline, key=lambda r: r.x0)
+                current_group = [vline_sorted[0]]
+
+                for rect_c in vline_sorted[1:]:
                     prev_rect = current_group[-1]
-                    # Check if vertically adjacent (within 2x the height of previous rect)
-                    vertical_gap = rect.y0 - prev_rect.y1
-                    max_gap = prev_rect.height * 2
+                    # Same line: vertical centers within half a line height
+                    same_line = (abs(rect_c.y0 - prev_rect.y0) <
+                                 max(prev_rect.height, rect_c.height) * 0.5)
+                    # Horizontally adjacent: gap less than 0.5x line height.
+                    # Use the group's combined right edge (not just the last
+                    # rect's x1) so that an earlier wide rect keeps subsequent
+                    # rects within its span adjacent to the group.
+                    group_x1  = max(r.x1 for r in current_group)
+                    h_gap     = rect_c.x0 - group_x1
+                    adjacent  = h_gap < max(prev_rect.height, rect_c.height) * 0.5
 
-                    if vertical_gap < max_gap:
-                        current_group.append(rect)
+                    if same_line and adjacent:
+                        current_group.append(rect_c)
                     else:
-                        groups.append(current_group)
-                        current_group = [rect]
-
-                groups.append(current_group)
-
-                # Combine rects within each group
-                all_rects = []
-                for group in groups:
-                    if len(group) > 1:
-                        combined = fitz.Rect(
-                            min(r.x0 for r in group),
-                            min(r.y0 for r in group),
-                            max(r.x1 for r in group),
-                            max(r.y1 for r in group)
-                        )
-                        all_rects.append(combined)
-                    else:
-                        all_rects.extend(group)
-
-                debug_log.append(f"Multi-line: consolidated into {len(all_rects)} contiguous groups")
-
-            # SAME-LINE CONSOLIDATION: When search returns multiple rects for a single
-            # text instance (common with small caps, mixed font sizes, or styled text),
-            # merge horizontally-adjacent rects on the same line into one combined rect.
-            # Without this, each span rect would trigger a separate full replacement.
-            #
-            # Implementation note: small-caps text produces rects that interleave at TWO
-            # slightly different y0 positions (e.g., large-caps glyphs at y0=743.52 and
-            # small-caps glyphs at y0=745.98).  If we sort by (y0, x0), all large-caps
-            # rects come before all small-caps rects, creating artificial 34-pt gaps that
-            # the adjacency check cannot bridge.  The fix is to group by VISUAL LINE first
-            # (rects whose y-ranges overlap or are within ½ line-height of each other),
-            # then sort within each visual line by x0.  This interleaves the two glyph
-            # series correctly and allows the adjacency check to work.
-            needs_fragment_consolidation = any(ch.isspace() for ch in target_text.strip())
-
-            if needs_fragment_consolidation and len(all_rects) > 1:
-                # ── Step 1: group rects into visual lines ──────────────────────────
-                # Sort by y0 to walk top-to-bottom.
-                by_y0 = sorted(all_rects, key=lambda r: r.y0)
-                vline_groups = []
-                vline_cur = [by_y0[0]]
-                vline_y1  = by_y0[0].y1
-
-                for r in by_y0[1:]:
-                    line_h = max(r.height, vline_cur[0].height)
-                    # Belongs to same visual line if it starts before the current
-                    # group's bottom edge + ½ line height (handles rects at two
-                    # closely-spaced y-positions as well as tight line spacing).
-                    if r.y0 < vline_y1 + line_h * 0.5:
-                        vline_cur.append(r)
-                        vline_y1 = max(vline_y1, r.y1)
-                    else:
-                        vline_groups.append(vline_cur)
-                        vline_cur = [r]
-                        vline_y1 = r.y1
-                vline_groups.append(vline_cur)
-
-                # ── Step 2: within each visual line, sort by x0 and merge ─────────
-                consolidated = []
-                for vline in vline_groups:
-                    vline_sorted = sorted(vline, key=lambda r: r.x0)
-                    current_group = [vline_sorted[0]]
-
-                    for rect_c in vline_sorted[1:]:
-                        prev_rect = current_group[-1]
-                        # Same line: vertical centers within half a line height
-                        same_line = (abs(rect_c.y0 - prev_rect.y0) <
-                                     max(prev_rect.height, rect_c.height) * 0.5)
-                        # Horizontally adjacent: gap less than 0.5x line height.
-                        # Use the group's combined right edge (not just the last
-                        # rect's x1) so that an earlier wide rect keeps subsequent
-                        # rects within its span adjacent to the group.
-                        group_x1  = max(r.x1 for r in current_group)
-                        h_gap     = rect_c.x0 - group_x1
-                        adjacent  = h_gap < max(prev_rect.height, rect_c.height) * 0.5
-
-                        if same_line and adjacent:
-                            current_group.append(rect_c)
+                        if len(current_group) > 1:
+                            consolidated.append(fitz.Rect(
+                                min(r.x0 for r in current_group),
+                                min(r.y0 for r in current_group),
+                                max(r.x1 for r in current_group),
+                                max(r.y1 for r in current_group)
+                            ))
                         else:
-                            if len(current_group) > 1:
-                                consolidated.append(fitz.Rect(
-                                    min(r.x0 for r in current_group),
-                                    min(r.y0 for r in current_group),
-                                    max(r.x1 for r in current_group),
-                                    max(r.y1 for r in current_group)
-                                ))
-                            else:
-                                consolidated.extend(current_group)
-                            current_group = [rect_c]
+                            consolidated.extend(current_group)
+                        current_group = [rect_c]
 
-                    # Flush final group for this visual line
-                    if len(current_group) > 1:
-                        consolidated.append(fitz.Rect(
-                            min(r.x0 for r in current_group),
-                            min(r.y0 for r in current_group),
-                            max(r.x1 for r in current_group),
-                            max(r.y1 for r in current_group)
-                        ))
-                    else:
-                        consolidated.extend(current_group)
+                # Flush final group for this visual line
+                if len(current_group) > 1:
+                    consolidated.append(fitz.Rect(
+                        min(r.x0 for r in current_group),
+                        min(r.y0 for r in current_group),
+                        max(r.x1 for r in current_group),
+                        max(r.y1 for r in current_group)
+                    ))
+                else:
+                    consolidated.extend(current_group)
 
-                if len(consolidated) < len(all_rects):
-                    debug_log.append(f"Same-line consolidation: {len(all_rects)} rects → {len(consolidated)} instances")
-                    all_rects = consolidated
+            if len(consolidated) < len(all_rects):
+                debug_log.append(f"Same-line consolidation: {len(all_rects)} rects → {len(consolidated)} instances")
+                all_rects = consolidated
 
-            # CROSS-LINE CONSOLIDATION: When search_for() finds a text phrase
-            # that wraps across two lines it returns one rect *per line fragment*
-            # instead of one rect for the whole match.  Without this pass every
-            # fragment would independently receive the full replacement text,
-            # producing duplicate / garbled output.
-            #
-            # A cross-line pair is detected when:
-            #   1. Two consecutive rects (sorted by y0) are on adjacent lines
-            #      — the vertical gap between them is ≤ 1.5× the line height.
-            #   2. The second rect starts further LEFT than the first by at
-            #      least one line-height worth of space — the classic "the text
-            #      ran to the end of line N and wrapped to the left margin of
-            #      line N+1" pattern.
-            #
-            # When a pair is found ONLY THE FIRST rect is kept for replacement.
-            # The second (continuation) rect is dropped.  Merging both into one
-            # tall rect is avoided because _get_line_structure() uses the rect
-            # height to compute vertical-tolerance, and a double-height rect
-            # triggers a strict tolerance that misses both original lines.
-            if needs_fragment_consolidation and len(all_rects) > 1:
-                sorted_rects = sorted(all_rects, key=lambda r: r.y0)
-                merged = []
-                i = 0
-                while i < len(sorted_rects):
-                    rect = sorted_rects[i]
-                    if i + 1 < len(sorted_rects):
-                        next_rect = sorted_rects[i + 1]
-                        y_gap = next_rect.y0 - rect.y1
-                        line_height = max(rect.height, next_rect.height)
-                        # Adjacent lines AND next rect's left edge is
-                        # significantly more to the left (line-wrap signature).
-                        # Require y_gap >= 0: overlapping rects (same visual line
-                        # with different y0 heights) must NOT be treated as a
-                        # cross-line pair — they should have been merged by the
-                        # same-line consolidation pass above.
-                        if (y_gap >= 0 and y_gap <= line_height * 1.5 and
-                                next_rect.x0 < rect.x0 - line_height):
-                            # Keep the first fragment (line-end portion) and
-                            # drop the second (line-start continuation).
-                            merged.append(rect)
-                            i += 2  # consume both, but only keep first
-                            continue
-                    merged.append(rect)
-                    i += 1
-                if len(merged) < len(all_rects):
-                    debug_log.append(
-                        f"Cross-line consolidation: {len(all_rects)} rects → {len(merged)} instances"
+        # CROSS-LINE CONSOLIDATION: When search_for() finds a text phrase
+        # that wraps across two lines it returns one rect *per line fragment*
+        # instead of one rect for the whole match.  Without this pass every
+        # fragment would independently receive the full replacement text,
+        # producing duplicate / garbled output.
+        #
+        # A cross-line pair is detected when:
+        #   1. Two consecutive rects (sorted by y0) are on adjacent lines
+        #      — the vertical gap between them is ≤ 1.5× the line height.
+        #   2. The second rect starts further LEFT than the first by at
+        #      least one line-height worth of space — the classic "the text
+        #      ran to the end of line N and wrapped to the left margin of
+        #      line N+1" pattern.
+        #
+        # When a pair is found ONLY THE FIRST rect is kept for replacement.
+        # The second (continuation) rect is dropped.  Merging both into one
+        # tall rect is avoided because _get_line_structure() uses the rect
+        # height to compute vertical-tolerance, and a double-height rect
+        # triggers a strict tolerance that misses both original lines.
+        if needs_fragment_consolidation and len(all_rects) > 1:
+            sorted_rects = sorted(all_rects, key=lambda r: r.y0)
+            merged = []
+            i = 0
+            while i < len(sorted_rects):
+                rect = sorted_rects[i]
+                if i + 1 < len(sorted_rects):
+                    next_rect = sorted_rects[i + 1]
+                    y_gap = next_rect.y0 - rect.y1
+                    line_height = max(rect.height, next_rect.height)
+                    # Adjacent lines AND next rect's left edge is
+                    # significantly more to the left (line-wrap signature).
+                    # Require y_gap >= 0: overlapping rects (same visual line
+                    # with different y0 heights) must NOT be treated as a
+                    # cross-line pair — they should have been merged by the
+                    # same-line consolidation pass above.
+                    if (y_gap >= 0 and y_gap <= line_height * 1.5 and
+                            next_rect.x0 < rect.x0 - line_height):
+                        # Keep the first fragment (line-end portion) and
+                        # drop the second (line-start continuation).
+                        merged.append(rect)
+                        i += 2  # consume both, but only keep first
+                        continue
+                merged.append(rect)
+                i += 1
+            if len(merged) < len(all_rects):
+                debug_log.append(
+                    f"Cross-line consolidation: {len(all_rects)} rects → {len(merged)} instances"
+                )
+                all_rects = merged
+
+        debug_log.append(f"Found {len(all_rects)} instances of target text length={len(target_text)}")
+        if occurrence_index is not None:
+            debug_log.append(f"occurrence_index={occurrence_index}: targeting instance {occurrence_index+1} of {len(all_rects)}")
+        success_count = 0
+
+        # Single loop over all instances found
+        for inst_idx, rect in enumerate(all_rects):
+            if occurrence_index is not None and inst_idx != occurrence_index:
+                debug_log.append(f"Skipping instance {inst_idx+1} (occurrence_index={occurrence_index})")
+                continue
+            debug_log.append(f"\n--- Instance {inst_idx+1}/{len(all_rects)} ---")
+                
+            # --- OPTICAL VERIFICATION PREP ---
+            # Capture 'before' snapshot of the area we are about to touch
+            # Estimate the region based on target text rect
+            # This is imperfect because we don't know the full extent of the NEW text yet,
+            # but we can guess it won't be massively larger than 2x original width usually.
+            verify_rect_est = rect + (-20, -10, rect.width * 2 + 20, 10)
+            verify_rect_est = verify_rect_est & page.rect
+            _pix_zoom = 2.0
+            try:
+                before_pix = _get_cached_pixmap(
+                    src_path_hint, page_number - 1, verify_rect_est, _pix_zoom)
+                if before_pix is None:
+                    before_pix = optical.capture_region(
+                        page, verify_rect_est, zoom=_pix_zoom)
+                    if before_pix is not None:
+                        _store_cached_pixmap(
+                            src_path_hint, page_number - 1, verify_rect_est, _pix_zoom,
+                            before_pix)
+            except Exception as e:
+                debug_log.append(f"Optical capture failed: {e}")
+                before_pix = None
+                
+            font_info = _get_span_font_info(page, target_text, rect)
+
+            # Font Detection
+            repl_font, use_internal_fontname, smart_reuse_buffer = None, None, None
+            matched_system_font_path = None
+            using_matched_system_font = False  # Track whether we found a matching font
+
+            if manual_overrides and manual_overrides.get('manual_font'):
+                m_font = manual_overrides['manual_font']
+                font_path, ps_name = m_font.split("|", 1) if "|" in m_font else (m_font, None)
+                if font_path in {"helv", "tiro", "cour", "symb", "zadb"}:
+                    use_internal_fontname = font_path
+                elif font_path == "internal" or "marcedit_preview" in font_path:
+                    if os.path.exists(font_path):
+                        try: repl_font = _get_cached_font(font_path)
+                        except Exception as e:
+                            print(f"[WARNING] Failed to load manual font: {type(e).__name__}", file=sys.stderr)
+                    if not repl_font:
+                        internal_font_name, _, reuse_buffer = _find_internal_font_name(doc, page, font_info['fontname'], replacement_text, target_text)
+                        if internal_font_name:
+                            use_internal_fontname, smart_reuse_buffer = internal_font_name, reuse_buffer
+                        else:
+                            system_font_path = _find_system_font(font_info['fontname'], flags=font_info.get('flags'))
+                    if system_font_path:
+                        try:
+                            subset_data = subset_font_from_path(system_font_path, replacement_text, ps_name=font_info.get('fontname', ''))
+                            repl_font = fitz.Font(fontbuffer=subset_data)
+                            matched_system_font_path = system_font_path
+                        except Exception as e:
+                            print(f"[WARNING] Font subsetting failed: {e}", file=sys.stderr)
+                elif os.path.exists(font_path):
+                    try:
+                        repl_font = _get_cached_font(font_path)
+                        matched_system_font_path = font_path
+                    except Exception as e:
+                        print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
+                else:
+                    try: repl_font = fitz.Font(m_font)
+                    except Exception as e:
+                        print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
+            else:
+                # Auto Font - HYBRID APPROACH for best quality
+                # Priority order:
+                # 1. Standard PDF fonts → use PyMuPDF built-in (pixel-perfect match)
+                # 2. Embedded font with full coverage → reuse buffer (exact same font)
+                # 3. System font for non-standard fonts → TrueType from system
+                # 4. Synthesis for custom fonts → harvest glyphs from PDF
+                # 5. Visual matcher → find closest system font
+                # 6. Fallback → built-in font as last resort
+
+                # Step 1: Check if it's a standard PDF font (Helvetica, Times, Courier, etc.)
+                is_standard, builtin_name = _is_standard_pdf_font(
+                    font_info['fontname'], flags=font_info.get('flags')
+                )
+
+                if is_standard and builtin_name:
+                    # Use PyMuPDF built-in font for pixel-perfect match
+                    use_internal_fontname = builtin_name
+                    using_matched_system_font = True  # Built-in fonts match original metrics
+                    debug_log.append(f"Using built-in font '{builtin_name}' for standard font '{font_info['fontname']}'")
+                else:
+                    # Step 2: Try to reuse embedded font buffer
+                    internal_font_name, _, reuse_buffer = _find_internal_font_name(
+                        doc, page, font_info['fontname'], replacement_text, target_text
                     )
-                    all_rects = merged
+                    if reuse_buffer:
+                        import binascii
+                        use_internal_fontname = f"subset_{binascii.hexlify(os.urandom(4)).decode()}"
+                        smart_reuse_buffer = reuse_buffer
+                        try:
+                            repl_font = fitz.Font(fontbuffer=reuse_buffer)
+                            using_matched_system_font = True  # Reused font matches original
+                            debug_log.append(f"Reusing embedded font buffer")
+                        except Exception:
+                            pass
 
-            debug_log.append(f"Found {len(all_rects)} instances of target text length={len(target_text)}")
-            if occurrence_index is not None:
-                debug_log.append(f"occurrence_index={occurrence_index}: targeting instance {occurrence_index+1} of {len(all_rects)}")
-            success_count = 0
-
-            # Single loop over all instances found
-            for inst_idx, rect in enumerate(all_rects):
-                if occurrence_index is not None and inst_idx != occurrence_index:
-                    debug_log.append(f"Skipping instance {inst_idx+1} (occurrence_index={occurrence_index})")
-                    continue
-                debug_log.append(f"\n--- Instance {inst_idx+1}/{len(all_rects)} ---")
-                
-                # --- OPTICAL VERIFICATION PREP ---
-                # Capture 'before' snapshot of the area we are about to touch
-                # Estimate the region based on target text rect
-                # This is imperfect because we don't know the full extent of the NEW text yet,
-                # but we can guess it won't be massively larger than 2x original width usually.
-                verify_rect_est = rect + (-20, -10, rect.width * 2 + 20, 10)
-                verify_rect_est = verify_rect_est & page.rect
-                _pix_zoom = 2.0
-                try:
-                    before_pix = _get_cached_pixmap(
-                        input_path, page_number - 1, verify_rect_est, _pix_zoom)
-                    if before_pix is None:
-                        before_pix = optical.capture_region(
-                            page, verify_rect_est, zoom=_pix_zoom)
-                        if before_pix is not None:
-                            _store_cached_pixmap(
-                                input_path, page_number - 1, verify_rect_est, _pix_zoom,
-                                before_pix)
-                except Exception as e:
-                    debug_log.append(f"Optical capture failed: {e}")
-                    before_pix = None
-                
-                font_info = _get_span_font_info(page, target_text, rect)
-
-                # Font Detection
-                repl_font, use_internal_fontname, smart_reuse_buffer = None, None, None
-                matched_system_font_path = None
-                using_matched_system_font = False  # Track whether we found a matching font
-
-                if manual_overrides and manual_overrides.get('manual_font'):
-                    m_font = manual_overrides['manual_font']
-                    font_path, ps_name = m_font.split("|", 1) if "|" in m_font else (m_font, None)
-                    if font_path in {"helv", "tiro", "cour", "symb", "zadb"}:
-                        use_internal_fontname = font_path
-                    elif font_path == "internal" or "marcedit_preview" in font_path:
-                        if os.path.exists(font_path):
-                            try: repl_font = _get_cached_font(font_path)
-                            except Exception as e:
-                                print(f"[WARNING] Failed to load manual font: {type(e).__name__}", file=sys.stderr)
-                        if not repl_font:
-                            internal_font_name, _, reuse_buffer = _find_internal_font_name(doc, page, font_info['fontname'], replacement_text, target_text)
-                            if internal_font_name:
-                                use_internal_fontname, smart_reuse_buffer = internal_font_name, reuse_buffer
-                            else:
-                                system_font_path = _find_system_font(font_info['fontname'], flags=font_info.get('flags'))
-                        if system_font_path:
+                # Step 3: If not standard and no embedded font, try system fonts
+                if not use_internal_fontname and not repl_font:
+                    system_font_found = False
+                    for finder in [_find_system_font, _find_bundled_font]:
+                        p = finder(font_info['fontname'], flags=font_info.get('flags')) if finder == _find_system_font else finder(font_info['fontname'])
+                        if p:
                             try:
-                                subset_data = subset_font_from_path(system_font_path, replacement_text, ps_name=font_info.get('fontname', ''))
+                                subset_data = subset_font_from_path(p, replacement_text, ps_name=font_info.get('fontname', ''))
                                 repl_font = fitz.Font(fontbuffer=subset_data)
-                                matched_system_font_path = system_font_path
+                                matched_system_font_path = p
+                                system_font_found = True
+                                using_matched_system_font = True
+                                debug_log.append(f"Using system font: {p}")
+                                break
                             except Exception as e:
-                                print(f"[WARNING] Font subsetting failed: {e}", file=sys.stderr)
-                    elif os.path.exists(font_path):
-                        try:
-                            repl_font = _get_cached_font(font_path)
-                            matched_system_font_path = font_path
-                        except Exception as e:
-                            print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
-                    else:
-                        try: repl_font = fitz.Font(m_font)
-                        except Exception as e:
-                            print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
-                else:
-                    # Auto Font - HYBRID APPROACH for best quality
-                    # Priority order:
-                    # 1. Standard PDF fonts → use PyMuPDF built-in (pixel-perfect match)
-                    # 2. Embedded font with full coverage → reuse buffer (exact same font)
-                    # 3. System font for non-standard fonts → TrueType from system
-                    # 4. Synthesis for custom fonts → harvest glyphs from PDF
-                    # 5. Visual matcher → find closest system font
-                    # 6. Fallback → built-in font as last resort
+                                debug_log.append(f"System font subset failed: {e}")
 
-                    # Step 1: Check if it's a standard PDF font (Helvetica, Times, Courier, etc.)
-                    is_standard, builtin_name = _is_standard_pdf_font(
-                        font_info['fontname'], flags=font_info.get('flags')
-                    )
-
-                    if is_standard and builtin_name:
-                        # Use PyMuPDF built-in font for pixel-perfect match
-                        use_internal_fontname = builtin_name
-                        using_matched_system_font = True  # Built-in fonts match original metrics
-                        debug_log.append(f"Using built-in font '{builtin_name}' for standard font '{font_info['fontname']}'")
-                    else:
-                        # Step 2: Try to reuse embedded font buffer
-                        internal_font_name, _, reuse_buffer = _find_internal_font_name(
-                            doc, page, font_info['fontname'], replacement_text, target_text
+                    # Step 4: If no system font, try synthesis for custom/embedded fonts
+                    if not system_font_found and not repl_font:
+                        synthesis_viable, synthesis_coverage = _check_synthesis_feasibility(
+                            doc, page, font_info['fontname'], replacement_text
                         )
-                        if reuse_buffer:
-                            import binascii
-                            use_internal_fontname = f"subset_{binascii.hexlify(os.urandom(4)).decode()}"
-                            smart_reuse_buffer = reuse_buffer
-                            try:
-                                repl_font = fitz.Font(fontbuffer=reuse_buffer)
-                                using_matched_system_font = True  # Reused font matches original
-                                debug_log.append(f"Reusing embedded font buffer")
-                            except Exception:
-                                pass
 
-                    # Step 3: If not standard and no embedded font, try system fonts
-                    if not use_internal_fontname and not repl_font:
-                        system_font_found = False
-                        for finder in [_find_system_font, _find_bundled_font]:
-                            p = finder(font_info['fontname'], flags=font_info.get('flags')) if finder == _find_system_font else finder(font_info['fontname'])
-                            if p:
-                                try:
-                                    subset_data = subset_font_from_path(p, replacement_text, ps_name=font_info.get('fontname', ''))
-                                    repl_font = fitz.Font(fontbuffer=subset_data)
-                                    matched_system_font_path = p
-                                    system_font_found = True
-                                    using_matched_system_font = True
-                                    debug_log.append(f"Using system font: {p}")
-                                    break
-                                except Exception as e:
-                                    debug_log.append(f"System font subset failed: {e}")
-
-                        # Step 4: If no system font, try synthesis for custom/embedded fonts
-                        if not system_font_found and not repl_font:
-                            synthesis_viable, synthesis_coverage = _check_synthesis_feasibility(
-                                doc, page, font_info['fontname'], replacement_text
-                            )
-
-                            if synthesis_viable:
-                                font_info['use_synthesis_mode'] = True
-                                font_info['synthesis_coverage'] = synthesis_coverage
-                                font_info['original_fontname'] = font_info.get('fontname', '')
-                                debug_log.append(f"Synthesis viable ({synthesis_coverage*100:.0f}% coverage) - using for custom font")
+                        if synthesis_viable:
+                            font_info['use_synthesis_mode'] = True
+                            font_info['synthesis_coverage'] = synthesis_coverage
+                            font_info['original_fontname'] = font_info.get('fontname', '')
+                            debug_log.append(f"Synthesis viable ({synthesis_coverage*100:.0f}% coverage) - using for custom font")
                     
-                    if (not use_internal_fontname and not repl_font and not font_info.get('use_synthesis_mode')
-                            and not (manual_overrides and manual_overrides.get('skip_visual_matching'))):
-                        try:
-                            from .visual_matcher import find_matching_font
-                            mp, mn, ms = find_matching_font(page, target_text, font_info['fontname'], exhaustive=manual_overrides.get('exhaustive_search') if manual_overrides else False, src_is_serif=(font_info['flags']&4)!=0 if font_info.get('flags') else None)
-
-                            # DIAGNOSTIC: Log visual matcher results
-                            import sys
-                            print(f"[DIAGNOSTIC] Visual matcher: score={ms:.3f}, font='{mn}', hasPath={bool(mp)}", file=sys.stderr)
-
-                            # PHASE 4 FIX: Raised threshold from 0.50 to 0.65 for better quality
-                            if mp and ms > 0.65:
-                                try:
-                                    subset_data = subset_font_from_path(mp, replacement_text, ps_name=mn)
-                                    repl_font = fitz.Font(fontbuffer=subset_data)
-                                    matched_system_font_path = mp
-                                    print(f"[DIAGNOSTIC] Using visual match: {mn} (score: {ms:.3f})", file=sys.stderr)
-                                except Exception:
-                                    repl_font = _get_cached_font(mp)
-                                    matched_system_font_path = mp
-                        except Exception as e:
-                            print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
-                    
-                    if not use_internal_fontname and not repl_font and not font_info.get('use_synthesis_mode'):
-                        use_internal_fontname = _map_to_builtin_font(font_info['fontname'])
-
-                # Scaling
-                adjusted_fontsize = font_info['fontsize']
-
-                # FONT SCALING FIX: Skip scaling when using matched system font
-                # When _find_system_font successfully finds the original font (e.g., Helvetica.ttc
-                # for Helvetica-Bold), we should use the original fontsize without scaling.
-                # The fonts have identical metrics, so no adjustment needed.
-                # Only apply scaling when using a DIFFERENT font (visual match, synthesis, etc.)
-
-                if using_matched_system_font:
-                    # System font matches original - use original fontsize directly
-                    debug_log.append(f"Using matched system font, skipping scaling (fontsize={adjusted_fontsize})")
-                else:
-                    # Different font - apply scaling to match visual appearance
+                if (not use_internal_fontname and not repl_font and not font_info.get('use_synthesis_mode')
+                        and not (manual_overrides and manual_overrides.get('skip_visual_matching'))):
                     try:
-                        ref_text = font_info.get('span_text', '') or target_text
-                        ref_char_data = _get_reference_char_metrics(page, rect, ref_text)
-                        if ref_char_data and repl_font and not isinstance(repl_font, dict):
-                            ref_char, ref_w_orig, ref_h_orig = ref_char_data
-                            repl_metrics = _measure_glyph_visual_metrics(repl_font, ref_char)
-                            if repl_metrics:
-                                repl_w, repl_h = repl_metrics
-                                is_cap_char = ref_char.isupper() and ref_char in "MHZITN"
-                                ref_h_normalized = ref_h_orig / 1.25 if is_cap_char else ref_h_orig
-                                nom_h = repl_h * font_info['fontsize']
+                        from .visual_matcher import find_matching_font
+                        mp, mn, ms = find_matching_font(page, target_text, font_info['fontname'], exhaustive=manual_overrides.get('exhaustive_search') if manual_overrides else False, src_is_serif=(font_info['flags']&4)!=0 if font_info.get('flags') else None)
 
-                                if nom_h > 0:
-                                    scale_factor = ref_h_normalized / nom_h
-                                    scale_factor = min(max(scale_factor, 0.75), 1.35)
-                                    if scale_factor < 0.8 or scale_factor > 1.2:
-                                        debug_log.append(f"Font scaling: {scale_factor:.2f}x (reference height: {ref_h_orig:.2f})")
-                                    adjusted_fontsize *= scale_factor
-                    except Exception as e:
-                        debug_log.append(f"Font scaling failed: {e}")
-
-                if manual_overrides and manual_overrides.get('manual_size_delta'):
-                    adjusted_fontsize += float(manual_overrides['manual_size_delta'])
-
-                tracking_delta = float(manual_overrides.get('manual_tracking_delta', 0)) if manual_overrides else 0
-
-                # Register font on page for ALL insertion paths (multiline, reflow, legacy)
-                # Previously, font was only registered in the legacy path, causing
-                # reflow/multiline to use an unregistered fontname and silently fall back
-                # to Helvetica with wrong metrics.
-                if use_internal_fontname and smart_reuse_buffer:
-                    try:
-                        page.insert_font(fontname=use_internal_fontname, fontbuffer=smart_reuse_buffer)
-                        debug_log.append(f"Pre-registered embedded font: {use_internal_fontname}")
-                    except Exception as e:
-                        debug_log.append(f"Font pre-registration failed: {e}")
-                elif not use_internal_fontname and repl_font and hasattr(repl_font, 'buffer'):
-                    try:
-                        page.insert_font(fontname="R0", fontbuffer=repl_font.buffer)
-                        debug_log.append(f"Pre-registered replacement font as R0")
-                    except Exception as e:
-                        debug_log.append(f"Font pre-registration failed: {e}")
-
-                # Redaction & Expansion
-                redact_fill = _parse_palette_color(manual_overrides['fill_color'].lower()) if manual_overrides and manual_overrides.get('fill_color') else None
-                
-                # Capture 'before' snapshot again if needed? 
-                # (Logic merged from previous inner loop)
-                # Removed redundant instance logging and optical prep
-                
-                try:
-                    # --- MULTI-LINE DETECTION ---
-                    # Check if target or replacement contains newlines
-                    is_multiline = '\n' in target_text or '\n' in replacement_text
-                    multiline_success = False
-                    multiline_rect = None
-                    reflow_rect = None
-
-                    if is_multiline:
-                        debug_log.append("Multi-line text detected - using multi-line handler")
-                        try:
-                            multiline_success, multiline_rect = _handle_multiline_replacement(
-                                page, target_text, replacement_text, rect, font_info,
-                                repl_font, use_internal_fontname, adjusted_fontsize,
-                                debug_log, manual_overrides
-                            )
-                            if multiline_success:
-                                reflow_rect = multiline_rect
-                                debug_log.append("Multi-line replacement successful!")
-                        except Exception as e:
-                            debug_log.append(f"Multi-line handler exception: {e}")
-                            multiline_success = False
-
-                    # --- REFLOW ENGINE ATTEMPT (single-line only) ---
-                    reflow_success = False
-                    reflow_attempted = False  # tracks whether reflow ran (and may have modified the page)
-
-                    if not is_multiline and not multiline_success:
-                        r_fontname = use_internal_fontname if use_internal_fontname else "R0"
-                        # Use original text color for visual consistency
-                        r_color = font_info.get('color', (0, 0, 0))
-
-                        # DIAGNOSTIC: Log reflow parameters
+                        # DIAGNOSTIC: Log visual matcher results
                         import sys
-                        print(f"[DIAGNOSTIC] Reflow: color={r_color}, fontsize={adjusted_fontsize:.1f}, fontname={r_fontname}", file=sys.stderr)
+                        print(f"[DIAGNOSTIC] Visual matcher: score={ms:.3f}, font='{mn}', hasPath={bool(mp)}", file=sys.stderr)
 
-                        try:
-                            # Font already pre-registered before branching
-
-                            r_info = {
-                                'fontname': r_fontname,
-                                'fontsize': adjusted_fontsize,
-                                'color': r_color,
-                                'use_synthesis_mode': font_info.get('use_synthesis_mode', False),
-                                'original_fontname': font_info.get('original_fontname', font_info.get('fontname', '')),
-                            }
-                            if matched_system_font_path:
-                                r_info['fontfile'] = matched_system_font_path
-                            # Forward user-specified fill_color so reflow can use it as
-                            # the redaction fill instead of (or overriding) the sampled bg.
-                            if manual_overrides and manual_overrides.get('fill_color'):
-                                parsed_bg = _parse_palette_color(manual_overrides['fill_color'].lower())
-                                if parsed_bg:
-                                    r_info['bg_fill'] = parsed_bg
-                            if manual_overrides and manual_overrides.get('justification'):
-                                r_info['justification'] = manual_overrides['justification']
-
-                            debug_log.append(f"Attempting Reflow on {rect}...")
-                            reflow_attempted = True  # reflow will apply its own redaction before returning
-                            r_success, r_rect = reflow.reflow_line(page, rect, replacement_text, r_info, debug_log, font_buffer=repl_font.buffer if hasattr(repl_font, 'buffer') else None)
-                            if r_success:
-                                reflow_success = True
-                                reflow_rect = r_rect
-                                debug_log.append("Reflow Success!")
-                            else:
-                                debug_log.append("Reflow Failed (returned False)")
-                        except Exception as e:
-                            debug_log.append(f"Reflow Exception: {e}")
+                        # PHASE 4 FIX: Raised threshold from 0.50 to 0.65 for better quality
+                        if mp and ms > 0.65:
+                            try:
+                                subset_data = subset_font_from_path(mp, replacement_text, ps_name=mn)
+                                repl_font = fitz.Font(fontbuffer=subset_data)
+                                matched_system_font_path = mp
+                                print(f"[DIAGNOSTIC] Using visual match: {mn} (score: {ms:.3f})", file=sys.stderr)
+                            except Exception:
+                                repl_font = _get_cached_font(mp)
+                                matched_system_font_path = mp
+                    except Exception as e:
+                        print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
                     
-                    # --- FALLBACK: LEGACY LOGIC ---
-                    if not reflow_success and not multiline_success:
-                        debug_log.append("Falling back to Legacy Insertion...")
+                if not use_internal_fontname and not repl_font and not font_info.get('use_synthesis_mode'):
+                    use_internal_fontname = _map_to_builtin_font(font_info['fontname'])
 
-                        # Calculate precise redaction rect to prevent blooming/artifacts
-                        precise_rect = _calculate_precise_redaction_rect(page, rect, target_text)
-                        debug_log.append(f"Precise redaction rect: {precise_rect} (original: {rect})")
+            # Scaling
+            adjusted_fontsize = font_info['fontsize']
 
-                        # REDACTION - When reflow was attempted, it already applied its own redaction
-                        # using PDF_REDACT_LINE_ART_NONE (preserving vector graphics).
-                        # In that case we must NOT use PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED for the
-                        # second redaction pass — doing so would remove vector border lines that reflow
-                        # intentionally preserved, causing a visible regression.
-                        # Only use REMOVE_IF_TOUCHED for fresh legacy runs (no prior reflow redaction).
-                        legacy_graphics_mode = (
-                            fitz.PDF_REDACT_LINE_ART_NONE
-                            if reflow_attempted
-                            else fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED
+            # FONT SCALING FIX: Skip scaling when using matched system font
+            # When _find_system_font successfully finds the original font (e.g., Helvetica.ttc
+            # for Helvetica-Bold), we should use the original fontsize without scaling.
+            # The fonts have identical metrics, so no adjustment needed.
+            # Only apply scaling when using a DIFFERENT font (visual match, synthesis, etc.)
+
+            if using_matched_system_font:
+                # System font matches original - use original fontsize directly
+                debug_log.append(f"Using matched system font, skipping scaling (fontsize={adjusted_fontsize})")
+            else:
+                # Different font - apply scaling to match visual appearance
+                try:
+                    ref_text = font_info.get('span_text', '') or target_text
+                    ref_char_data = _get_reference_char_metrics(page, rect, ref_text)
+                    if ref_char_data and repl_font and not isinstance(repl_font, dict):
+                        ref_char, ref_w_orig, ref_h_orig = ref_char_data
+                        repl_metrics = _measure_glyph_visual_metrics(repl_font, ref_char)
+                        if repl_metrics:
+                            repl_w, repl_h = repl_metrics
+                            is_cap_char = ref_char.isupper() and ref_char in "MHZITN"
+                            ref_h_normalized = ref_h_orig / 1.25 if is_cap_char else ref_h_orig
+                            nom_h = repl_h * font_info['fontsize']
+
+                            if nom_h > 0:
+                                scale_factor = ref_h_normalized / nom_h
+                                scale_factor = min(max(scale_factor, 0.75), 1.35)
+                                if scale_factor < 0.8 or scale_factor > 1.2:
+                                    debug_log.append(f"Font scaling: {scale_factor:.2f}x (reference height: {ref_h_orig:.2f})")
+                                adjusted_fontsize *= scale_factor
+                except Exception as e:
+                    debug_log.append(f"Font scaling failed: {e}")
+
+            if manual_overrides and manual_overrides.get('manual_size_delta'):
+                adjusted_fontsize += float(manual_overrides['manual_size_delta'])
+
+            tracking_delta = float(manual_overrides.get('manual_tracking_delta', 0)) if manual_overrides else 0
+
+            # Register font on page for ALL insertion paths (multiline, reflow, legacy)
+            # Previously, font was only registered in the legacy path, causing
+            # reflow/multiline to use an unregistered fontname and silently fall back
+            # to Helvetica with wrong metrics.
+            if use_internal_fontname and smart_reuse_buffer:
+                try:
+                    page.insert_font(fontname=use_internal_fontname, fontbuffer=smart_reuse_buffer)
+                    debug_log.append(f"Pre-registered embedded font: {use_internal_fontname}")
+                except Exception as e:
+                    debug_log.append(f"Font pre-registration failed: {e}")
+            elif not use_internal_fontname and repl_font and hasattr(repl_font, 'buffer'):
+                try:
+                    page.insert_font(fontname="R0", fontbuffer=repl_font.buffer)
+                    debug_log.append(f"Pre-registered replacement font as R0")
+                except Exception as e:
+                    debug_log.append(f"Font pre-registration failed: {e}")
+
+            # Redaction & Expansion
+            redact_fill = _parse_palette_color(manual_overrides['fill_color'].lower()) if manual_overrides and manual_overrides.get('fill_color') else None
+                
+            # Capture 'before' snapshot again if needed?
+            # (Logic merged from previous inner loop)
+            # Removed redundant instance logging and optical prep
+                
+            try:
+                # --- MULTI-LINE DETECTION ---
+                # Check if target or replacement contains newlines
+                is_multiline = '\n' in target_text or '\n' in replacement_text
+                multiline_success = False
+                multiline_rect = None
+                reflow_rect = None
+
+                if is_multiline:
+                    debug_log.append("Multi-line text detected - using multi-line handler")
+                    try:
+                        multiline_success, multiline_rect = _handle_multiline_replacement(
+                            page, target_text, replacement_text, rect, font_info,
+                            repl_font, use_internal_fontname, adjusted_fontsize,
+                            debug_log, manual_overrides
                         )
-                        page.add_redact_annot(precise_rect, fill=redact_fill)
-                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=legacy_graphics_mode)
-                        debug_log.append(f"Legacy redaction: graphics_mode={'LINE_ART_NONE (reflow-safe)' if reflow_attempted else 'LINE_ART_REMOVE_IF_TOUCHED'}")
-                        
-                        # CALC POSITION - Use proper baseline positioning
-                        # First, determine alignment from manual override or auto-detect
-                        if manual_overrides and manual_overrides.get('justification'):
-                            legacy_alignment = manual_overrides['justification']
-                            debug_log.append(f"Legacy: Using manual alignment: {legacy_alignment}")
-                        else:
-                            legacy_alignment = _detect_justification(page, rect)
-                            debug_log.append(f"Legacy: Auto-detected alignment: {legacy_alignment}")
+                        if multiline_success:
+                            reflow_rect = multiline_rect
+                            debug_log.append("Multi-line replacement successful!")
+                    except Exception as e:
+                        debug_log.append(f"Multi-line handler exception: {e}")
+                        multiline_success = False
 
-                        # Calculate text width for alignment
+                # --- REFLOW ENGINE ATTEMPT (single-line only) ---
+                reflow_success = False
+                reflow_attempted = False  # tracks whether reflow ran (and may have modified the page)
+
+                if not is_multiline and not multiline_success:
+                    r_fontname = use_internal_fontname if use_internal_fontname else "R0"
+                    # Use original text color for visual consistency
+                    r_color = font_info.get('color', (0, 0, 0))
+
+                    # DIAGNOSTIC: Log reflow parameters
+                    import sys
+                    print(f"[DIAGNOSTIC] Reflow: color={r_color}, fontsize={adjusted_fontsize:.1f}, fontname={r_fontname}", file=sys.stderr)
+
+                    try:
+                        # Font already pre-registered before branching
+
+                        r_info = {
+                            'fontname': r_fontname,
+                            'fontsize': adjusted_fontsize,
+                            'color': r_color,
+                            'use_synthesis_mode': font_info.get('use_synthesis_mode', False),
+                            'original_fontname': font_info.get('original_fontname', font_info.get('fontname', '')),
+                        }
+                        if matched_system_font_path:
+                            r_info['fontfile'] = matched_system_font_path
+                        # Forward user-specified fill_color so reflow can use it as
+                        # the redaction fill instead of (or overriding) the sampled bg.
+                        if manual_overrides and manual_overrides.get('fill_color'):
+                            parsed_bg = _parse_palette_color(manual_overrides['fill_color'].lower())
+                            if parsed_bg:
+                                r_info['bg_fill'] = parsed_bg
+                        if manual_overrides and manual_overrides.get('justification'):
+                            r_info['justification'] = manual_overrides['justification']
+
+                        debug_log.append(f"Attempting Reflow on {rect}...")
+                        reflow_attempted = True  # reflow will apply its own redaction before returning
+                        r_success, r_rect = reflow.reflow_line(page, rect, replacement_text, r_info, debug_log, font_buffer=repl_font.buffer if hasattr(repl_font, 'buffer') else None)
+                        if r_success:
+                            reflow_success = True
+                            reflow_rect = r_rect
+                            debug_log.append("Reflow Success!")
+                        else:
+                            debug_log.append("Reflow Failed (returned False)")
+                    except Exception as e:
+                        debug_log.append(f"Reflow Exception: {e}")
+
+                # --- FALLBACK: LEGACY LOGIC ---
+                if not reflow_success and not multiline_success:
+                    debug_log.append("Falling back to Legacy Insertion...")
+
+                    # Calculate precise redaction rect to prevent blooming/artifacts
+                    precise_rect = _calculate_precise_redaction_rect(page, rect, target_text)
+                    debug_log.append(f"Precise redaction rect: {precise_rect} (original: {rect})")
+
+                    # REDACTION - When reflow was attempted, it already applied its own redaction
+                    # using PDF_REDACT_LINE_ART_NONE (preserving vector graphics).
+                    # In that case we must NOT use PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED for the
+                    # second redaction pass — doing so would remove vector border lines that reflow
+                    # intentionally preserved, causing a visible regression.
+                    # Only use REMOVE_IF_TOUCHED for fresh legacy runs (no prior reflow redaction).
+                    legacy_graphics_mode = (
+                        fitz.PDF_REDACT_LINE_ART_NONE
+                        if reflow_attempted
+                        else fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED
+                    )
+                    page.add_redact_annot(precise_rect, fill=redact_fill)
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=legacy_graphics_mode)
+                    debug_log.append(f"Legacy redaction: graphics_mode={'LINE_ART_NONE (reflow-safe)' if reflow_attempted else 'LINE_ART_REMOVE_IF_TOUCHED'}")
+
+                    # CALC POSITION - Use proper baseline positioning
+                    # First, determine alignment from manual override or auto-detect
+                    if manual_overrides and manual_overrides.get('justification'):
+                        legacy_alignment = manual_overrides['justification']
+                        debug_log.append(f"Legacy: Using manual alignment: {legacy_alignment}")
+                    else:
+                        legacy_alignment = _detect_justification(page, rect)
+                        debug_log.append(f"Legacy: Auto-detected alignment: {legacy_alignment}")
+
+                    # Calculate text width for alignment
+                    try:
+                        # Use actual font for width estimation when available
+                        _est_fontname = use_internal_fontname or fallback_fontname or "helv"
+                        legacy_font = fitz.Font(_est_fontname)
+                        legacy_text_width = legacy_font.text_length(replacement_text, fontsize=adjusted_fontsize)
+                    except Exception:
                         try:
-                            # Use actual font for width estimation when available
-                            _est_fontname = use_internal_fontname or fallback_fontname or "helv"
-                            legacy_font = fitz.Font(_est_fontname)
+                            legacy_font = fitz.Font("helv")
                             legacy_text_width = legacy_font.text_length(replacement_text, fontsize=adjusted_fontsize)
                         except Exception:
-                            try:
-                                legacy_font = fitz.Font("helv")
-                                legacy_text_width = legacy_font.text_length(replacement_text, fontsize=adjusted_fontsize)
-                            except Exception:
-                                legacy_text_width = len(replacement_text) * adjusted_fontsize * 0.5
+                            legacy_text_width = len(replacement_text) * adjusted_fontsize * 0.5
 
-                        # Calculate ins_x based on alignment
-                        if legacy_alignment == "center":
-                            original_center = (rect.x0 + rect.x1) / 2
-                            ins_x = original_center - (legacy_text_width / 2)
-                            debug_log.append(f"Legacy: Center-aligned at x={ins_x:.2f}")
-                        elif legacy_alignment == "right":
-                            ins_x = rect.x1 - legacy_text_width
-                            debug_log.append(f"Legacy: Right-aligned at x={ins_x:.2f}")
-                        elif legacy_alignment == "justified":
-                            ins_x = rect.x0
-                            debug_log.append(f"Legacy: Justified at x={ins_x:.2f}")
-                        else:  # "left"
-                            ins_x = rect.x0
-                            debug_log.append(f"Legacy: Left-aligned at x={ins_x:.2f}")
+                    # Calculate ins_x based on alignment
+                    if legacy_alignment == "center":
+                        original_center = (rect.x0 + rect.x1) / 2
+                        ins_x = original_center - (legacy_text_width / 2)
+                        debug_log.append(f"Legacy: Center-aligned at x={ins_x:.2f}")
+                    elif legacy_alignment == "right":
+                        ins_x = rect.x1 - legacy_text_width
+                        debug_log.append(f"Legacy: Right-aligned at x={ins_x:.2f}")
+                    elif legacy_alignment == "justified":
+                        ins_x = rect.x0
+                        debug_log.append(f"Legacy: Justified at x={ins_x:.2f}")
+                    else:  # "left"
+                        ins_x = rect.x0
+                        debug_log.append(f"Legacy: Left-aligned at x={ins_x:.2f}")
 
-                        # CRITICAL: Use actual baseline, not rect bottom
-                        # rect.y1 is the bottom of the bounding box, not the baseline
-                        # For text with descenders (g, j, p, q, y), the baseline is ABOVE rect.y1
-                        origin = font_info.get('origin')
-                        if origin and len(origin) >= 2 and origin[1] is not None:
-                            # Use the actual baseline from the original text
-                            ins_y = origin[1]
-                            debug_log.append(f"Using actual baseline: {ins_y:.2f}")
-                        else:
-                            # Fallback: Estimate baseline from rect
-                            # For text with descenders, baseline is typically 85% down from rect top
-                            # For text without descenders, baseline is ~90% down
-                            # We use a conservative estimate that works for both
-                            rect_height = rect.y1 - rect.y0
-                            ins_y = rect.y0 + rect_height * 0.85  # 85% down from top (NOT y1 + offset!)
-                            debug_log.append(f"Using estimated baseline: {ins_y:.2f} (rect.y0: {rect.y0:.2f}, rect.y1: {rect.y1:.2f})")
+                    # CRITICAL: Use actual baseline, not rect bottom
+                    # rect.y1 is the bottom of the bounding box, not the baseline
+                    # For text with descenders (g, j, p, q, y), the baseline is ABOVE rect.y1
+                    origin = font_info.get('origin')
+                    if origin and len(origin) >= 2 and origin[1] is not None:
+                        # Use the actual baseline from the original text
+                        ins_y = origin[1]
+                        debug_log.append(f"Using actual baseline: {ins_y:.2f}")
+                    else:
+                        # Fallback: Estimate baseline from rect
+                        # For text with descenders, baseline is typically 85% down from rect top
+                        # For text without descenders, baseline is ~90% down
+                        # We use a conservative estimate that works for both
+                        rect_height = rect.y1 - rect.y0
+                        ins_y = rect.y0 + rect_height * 0.85  # 85% down from top (NOT y1 + offset!)
+                        debug_log.append(f"Using estimated baseline: {ins_y:.2f} (rect.y0: {rect.y0:.2f}, rect.y1: {rect.y1:.2f})")
 
-                        if manual_overrides:
-                            ins_x += float(manual_overrides.get('manual_x_offset', 0))
-                            ins_y += float(manual_overrides.get('manual_y_offset', 0))
+                    if manual_overrides:
+                        ins_x += float(manual_overrides.get('manual_x_offset', 0))
+                        ins_y += float(manual_overrides.get('manual_y_offset', 0))
 
-                        # Extract style flags from manual_overrides or font_info
-                        # Priority: manual_overrides > font_info flags
-                        is_bold = False
-                        is_italic = False
-                        has_underline = False
-                        has_strikethrough = False
+                    # Extract style flags from manual_overrides or font_info
+                    # Priority: manual_overrides > font_info flags
+                    is_bold = False
+                    is_italic = False
+                    has_underline = False
+                    has_strikethrough = False
 
-                        if manual_overrides:
-                            # Check manual overrides first (user-specified style)
-                            if manual_overrides.get('is_bold'):
-                                is_bold = True
-                                debug_log.append("Using manual bold override")
-                            if manual_overrides.get('is_italic'):
+                    if manual_overrides:
+                        # Check manual overrides first (user-specified style)
+                        if manual_overrides.get('is_bold'):
+                            is_bold = True
+                            debug_log.append("Using manual bold override")
+                        if manual_overrides.get('is_italic'):
+                            is_italic = True
+                            debug_log.append("Using manual italic override")
+                        if manual_overrides.get('underline'):
+                            has_underline = True
+                            debug_log.append("Using manual underline override")
+                        if manual_overrides.get('strikethrough'):
+                            has_strikethrough = True
+                            debug_log.append("Using manual strikethrough override")
+
+                    # If no manual override, check font_info flags and detect decorations
+                    if not (is_bold or is_italic or has_underline or has_strikethrough):
+                        if font_info.get('flags'):
+                            flags = font_info['flags']
+                            # bit 1 (2): Italic, bit 4 (16): Bold, bit 0 (1): Superscript
+                            if flags & 2:
                                 is_italic = True
-                                debug_log.append("Using manual italic override")
-                            if manual_overrides.get('underline'):
+                                debug_log.append("Detected italic from font flags")
+                            if flags & 16:
+                                is_bold = True
+                                debug_log.append("Detected bold from font flags")
+
+                        # Detect text decorations (underline, strikethrough) from drawing operations
+                        decorations = _detect_text_decorations(page, rect)
+                        if decorations.get('detected'):
+                            if decorations.get('underline'):
                                 has_underline = True
-                                debug_log.append("Using manual underline override")
-                            if manual_overrides.get('strikethrough'):
+                                debug_log.append("Detected underline from drawing operations")
+                            if decorations.get('strikethrough'):
                                 has_strikethrough = True
-                                debug_log.append("Using manual strikethrough override")
+                                debug_log.append("Detected strikethrough from drawing operations")
 
-                        # If no manual override, check font_info flags and detect decorations
-                        if not (is_bold or is_italic or has_underline or has_strikethrough):
-                            if font_info.get('flags'):
-                                flags = font_info['flags']
-                                # bit 1 (2): Italic, bit 4 (16): Bold, bit 0 (1): Superscript
-                                if flags & 2:
-                                    is_italic = True
-                                    debug_log.append("Detected italic from font flags")
-                                if flags & 16:
-                                    is_bold = True
-                                    debug_log.append("Detected bold from font flags")
+                    # INSERTION
+                    # Preserve original color unless force_black_text override is set
+                    if manual_overrides and manual_overrides.get('force_black_text'):
+                        color = (0, 0, 0)
+                    else:
+                        color = font_info.get('color', (0, 0, 0))
 
-                            # Detect text decorations (underline, strikethrough) from drawing operations
-                            decorations = _detect_text_decorations(page, rect)
-                            if decorations.get('detected'):
-                                if decorations.get('underline'):
-                                    has_underline = True
-                                    debug_log.append("Detected underline from drawing operations")
-                                if decorations.get('strikethrough'):
-                                    has_strikethrough = True
-                                    debug_log.append("Detected strikethrough from drawing operations")
+                    # DIAGNOSTIC: Log insertion parameters
+                    import sys
+                    print(f"[DIAGNOSTIC] Legacy insert_text: color={color}, fontsize={adjusted_fontsize:.1f}, fontname={use_internal_fontname or 'R0'}", file=sys.stderr)
 
-                        # INSERTION
-                        # Preserve original color unless force_black_text override is set
-                        if manual_overrides and manual_overrides.get('force_black_text'):
-                            color = (0, 0, 0)
-                        else:
-                            color = font_info.get('color', (0, 0, 0))
-
-                        # DIAGNOSTIC: Log insertion parameters
-                        import sys
-                        print(f"[DIAGNOSTIC] Legacy insert_text: color={color}, fontsize={adjusted_fontsize:.1f}, fontname={use_internal_fontname or 'R0'}", file=sys.stderr)
-
-                        if use_internal_fontname:
-                            try:
-                                page.insert_font(fontname=use_internal_fontname, fontbuffer=smart_reuse_buffer)
-                            except Exception as e:
-                                print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
-                            if legacy_alignment == "justified":
-                                _insert_justified_text(
-                                    page, (ins_x, ins_y), replacement_text,
-                                    fontname=use_internal_fontname, fontsize=adjusted_fontsize,
-                                    color=color, available_width=rect.width,
-                                    debug_log=debug_log
-                                )
-                            elif tracking_delta:
-                                _insert_tracked_text(
-                                    page, (ins_x, ins_y), replacement_text,
-                                    fontname=use_internal_fontname, fontsize=adjusted_fontsize,
-                                    color=color, tracking_delta=tracking_delta,
-                                    debug_log=debug_log
-                                )
-                            else:
-                                page.insert_text((ins_x, ins_y), replacement_text, fontname=use_internal_fontname, fontsize=adjusted_fontsize, color=color)
-                        else:
-                            # Select styled built-in font based on detected weight/style
-                            fallback_fontname = _get_base14_fontname(
-                                font_info.get('fontname', 'Helvetica'),
-                                is_bold=is_bold,
-                                is_italic=is_italic
+                    if use_internal_fontname:
+                        try:
+                            page.insert_font(fontname=use_internal_fontname, fontbuffer=smart_reuse_buffer)
+                        except Exception as e:
+                            print(f"[WARNING] Font loading exception: {e}", file=sys.stderr)
+                        if legacy_alignment == "justified":
+                            _insert_justified_text(
+                                page, (ins_x, ins_y), replacement_text,
+                                fontname=use_internal_fontname, fontsize=adjusted_fontsize,
+                                color=color, available_width=rect.width,
+                                debug_log=debug_log
                             )
-                            # Try custom font buffer first
-                            if repl_font and hasattr(repl_font, 'buffer'):
-                                try:
-                                    page.insert_font(fontname="R0", fontbuffer=repl_font.buffer)
-                                    if legacy_alignment == "justified":
-                                        _insert_justified_text(
-                                            page, (ins_x, ins_y), replacement_text,
-                                            fontname="R0", fontsize=adjusted_fontsize,
-                                            color=color, available_width=rect.width,
-                                            debug_log=debug_log
-                                        )
-                                    elif tracking_delta:
-                                        _insert_tracked_text(
-                                            page, (ins_x, ins_y), replacement_text,
-                                            fontname="R0", fontsize=adjusted_fontsize,
-                                            color=color, tracking_delta=tracking_delta,
-                                            debug_log=debug_log
-                                        )
-                                    else:
-                                        page.insert_text((ins_x, ins_y), replacement_text, fontname="R0", fontsize=adjusted_fontsize, color=color)
-                                except Exception:
-                                    if legacy_alignment == "justified":
-                                        _insert_justified_text(
-                                            page, (ins_x, ins_y), replacement_text,
-                                            fontname=fallback_fontname, fontsize=adjusted_fontsize,
-                                            color=color, available_width=rect.width,
-                                            debug_log=debug_log
-                                        )
-                                    elif tracking_delta:
-                                        _insert_tracked_text(
-                                            page, (ins_x, ins_y), replacement_text,
-                                            fontname=fallback_fontname, fontsize=adjusted_fontsize,
-                                            color=color, tracking_delta=tracking_delta,
-                                            debug_log=debug_log
-                                        )
-                                    else:
-                                        page.insert_text((ins_x, ins_y), replacement_text, fontname=fallback_fontname, fontsize=adjusted_fontsize, color=color)
-                            else:
+                        elif tracking_delta:
+                            _insert_tracked_text(
+                                page, (ins_x, ins_y), replacement_text,
+                                fontname=use_internal_fontname, fontsize=adjusted_fontsize,
+                                color=color, tracking_delta=tracking_delta,
+                                debug_log=debug_log
+                            )
+                        else:
+                            page.insert_text((ins_x, ins_y), replacement_text, fontname=use_internal_fontname, fontsize=adjusted_fontsize, color=color)
+                    else:
+                        # Select styled built-in font based on detected weight/style
+                        fallback_fontname = _get_base14_fontname(
+                            font_info.get('fontname', 'Helvetica'),
+                            is_bold=is_bold,
+                            is_italic=is_italic
+                        )
+                        # Try custom font buffer first
+                        if repl_font and hasattr(repl_font, 'buffer'):
+                            try:
+                                page.insert_font(fontname="R0", fontbuffer=repl_font.buffer)
+                                if legacy_alignment == "justified":
+                                    _insert_justified_text(
+                                        page, (ins_x, ins_y), replacement_text,
+                                        fontname="R0", fontsize=adjusted_fontsize,
+                                        color=color, available_width=rect.width,
+                                        debug_log=debug_log
+                                    )
+                                elif tracking_delta:
+                                    _insert_tracked_text(
+                                        page, (ins_x, ins_y), replacement_text,
+                                        fontname="R0", fontsize=adjusted_fontsize,
+                                        color=color, tracking_delta=tracking_delta,
+                                        debug_log=debug_log
+                                    )
+                                else:
+                                    page.insert_text((ins_x, ins_y), replacement_text, fontname="R0", fontsize=adjusted_fontsize, color=color)
+                            except Exception:
                                 if legacy_alignment == "justified":
                                     _insert_justified_text(
                                         page, (ins_x, ins_y), replacement_text,
@@ -3963,173 +3979,255 @@ def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, rep
                                     )
                                 else:
                                     page.insert_text((ins_x, ins_y), replacement_text, fontname=fallback_fontname, fontsize=adjusted_fontsize, color=color)
-
-                        # Apply style simulation after text insertion
-                        # This is critical for preserving bold/italic/decorations when the replacement font
-                        # doesn't have native variants or when decorations need to be redrawn
-                        if is_bold:
-                            try:
-                                # Calculate stroke width based on font size (typically 2-3% of font size)
-                                stroke_width = max(0.2, adjusted_fontsize * 0.025)
-                                _inject_simulated_bold(page, stroke_width=stroke_width)
-                                debug_log.append(f"Applied simulated bold (stroke_width={stroke_width:.2f})")
-                            except Exception as e:
-                                debug_log.append(f"Failed to apply simulated bold: {e}")
-
-                        if is_italic:
-                            try:
-                                # For italic, we need to apply a transformation matrix to skew the text
-                                # This is a bit tricky in PyMuPDF, so we'll use a content stream hack
-                                # Get the last text insertion and apply an italic transform
-                                _inject_simulated_italic(page)
-                                debug_log.append("Applied simulated italic")
-                            except Exception as e:
-                                debug_log.append(f"Failed to apply simulated italic: {e}")
-
-                        # Apply text decorations (underline, strikethrough)
-                        # These need to be drawn after text insertion so they appear on top
-                        if has_underline:
-                            try:
-                                # Measure actual text width for decoration positioning
-                                try:
-                                    _dec_font = fitz.Font(use_internal_fontname or fallback_fontname or "helv")
-                                    _dec_width = _dec_font.text_length(replacement_text, fontsize=adjusted_fontsize)
-                                except Exception:
-                                    _dec_width = len(replacement_text) * adjusted_fontsize * 0.5
-                                text_rect = fitz.Rect(ins_x, rect.y0, ins_x + _dec_width, rect.y1)
-                                _inject_text_underline(page, text_rect, color=color)
-                                debug_log.append("Applied underline decoration")
-                            except Exception as e:
-                                debug_log.append(f"Failed to apply underline: {e}")
-
-                        if has_strikethrough:
-                            try:
-                                # Measure actual text width for decoration positioning
-                                try:
-                                    _dec_font = fitz.Font(use_internal_fontname or fallback_fontname or "helv")
-                                    _dec_width = _dec_font.text_length(replacement_text, fontsize=adjusted_fontsize)
-                                except Exception:
-                                    _dec_width = len(replacement_text) * adjusted_fontsize * 0.5
-                                text_rect = fitz.Rect(ins_x, rect.y0, ins_x + _dec_width, rect.y1)
-                                _inject_text_strikethrough(page, text_rect, color=color)
-                                debug_log.append("Applied strikethrough decoration")
-                            except Exception as e:
-                                debug_log.append(f"Failed to apply strikethrough: {e}")
-                    
-                    # --- OPTICAL VERIFICATION ---
-                    if 'before_pix' in locals() and before_pix:
-                        try:
-                            # Re-capture 'after' state
-                            after_pix = optical.capture_region(page, verify_rect_est)
-
-                            # BUG #58 FIX: Clear deletion detection logic
-                            # Explicit check for empty replacement (full deletion)
-                            # or replacement much shorter than original (>80% reduction)
-                            replacement_stripped = replacement_text.strip()
-                            target_stripped = target_text.strip()
-
-                            is_full_deletion = len(replacement_stripped) == 0
-                            is_deletion = is_full_deletion or (len(replacement_stripped) < len(target_stripped) * 0.2)
-
-                            if is_deletion:
-                                deletion_type = "full" if is_full_deletion else "partial"
-                                debug_log.append(f"{deletion_type.capitalize()} deletion detected (replacement {len(replacement_text)} chars vs original {len(target_text)} chars) - relaxing collision detection")
-
-                            # Calculate exclusion rect
-                            zoom = 2.0
-                            # Use multiline_rect if available, otherwise reflow_rect, otherwise rect
-                            if multiline_success and multiline_rect is not None:
-                                target_excl = multiline_rect
-                            elif reflow_success and reflow_rect is not None:
-                                target_excl = reflow_rect
-                            else:
-                                target_excl = rect
-
-                            # For deletions, expand exclusion rect to be more generous
-                            if is_deletion:
-                                # Expand by 50% on all sides for deletions
-                                expansion = target_excl.width * 0.5
-                                target_excl = target_excl + (-expansion, -expansion, expansion, expansion)
-
-                            rel_x0 = (target_excl.x0 - verify_rect_est.x0) * zoom
-                            rel_y0 = (target_excl.y0 - verify_rect_est.y0) * zoom
-                            rel_x1 = (target_excl.x1 - verify_rect_est.x0) * zoom
-                            rel_y1 = (target_excl.y1 - verify_rect_est.y0) * zoom
-                            excl_rect = fitz.Rect(rel_x0, rel_y0, rel_x1, rel_y1)
-
-                            if skip_collision:
-                                has_collision = False
-                                msg = "Collision check skipped (user allowed overrun)"
-                                debug_log.append(msg)
-                            else:
-                                has_collision, msg = optical.detect_visual_collision(
-                                    before_pix, after_pix,
-                                    exclusion_rect=excl_rect,
-                                    allow_warning=True       # Allow moderate collisions (5-15%) - common in dense layouts
+                        else:
+                            if legacy_alignment == "justified":
+                                _insert_justified_text(
+                                    page, (ins_x, ins_y), replacement_text,
+                                    fontname=fallback_fontname, fontsize=adjusted_fontsize,
+                                    color=color, available_width=rect.width,
+                                    debug_log=debug_log
                                 )
-
-                            # GHOST EDIT HANDLING: Some edits legitimately produce minimal visual changes
-                            # and should not be flagged as failures:
-                            # 1. Identity edits: replacing text with itself
-                            # 2. Shrink edits where replacement is a prefix of original (e.g., "Philadelphia" → "Phila")
-                            # 3. Same-start edits where both texts start the same way
-                            # In these cases, the visual pixels overlap significantly and diff detection fails
-
-                            is_identity_edit = target_text.strip() == replacement_text.strip()
-                            is_prefix_shrink = (
-                                target_text.strip().startswith(replacement_text.strip()) or
-                                replacement_text.strip().startswith(target_text.strip())
-                            )
-                            # Also allow if reflow reported success (trust the lower-level operation)
-                            reflow_confirmed = reflow_success or multiline_success
-
-                            if "Ghost Edit" in msg and (is_identity_edit or is_prefix_shrink or reflow_confirmed):
-                                if is_identity_edit:
-                                    debug_log.append(f"Identity edit detected - 'Ghost Edit' is expected behavior")
-                                elif is_prefix_shrink:
-                                    debug_log.append(f"Prefix shrink detected - 'Ghost Edit' acceptable for overlapping text")
-                                else:
-                                    debug_log.append(f"Reflow succeeded - trusting result despite Ghost Edit detection")
-                                has_collision = False
-
-                            # REFLOW TRUST: For edits where reflow succeeded, trust the operation
-                            # even if optical collision is detected. Reflow has already handled
-                            # the layout properly, and collision detection can have false positives
-                            # when dealing with font substitution, shrink operations, or tight layouts.
-                            if has_collision and reflow_confirmed:
-                                if is_identity_edit:
-                                    debug_log.append(f"Identity edit with reflow success - trusting result despite collision ({msg})")
-                                elif is_prefix_shrink:
-                                    debug_log.append(f"Shrink edit with reflow success - trusting result despite collision ({msg})")
-                                else:
-                                    debug_log.append(f"Edit with reflow success - trusting result despite collision ({msg})")
-                                has_collision = False
-
-                            if has_collision:
-                                 debug_log.append(f"Visual Verification FAILED: {msg}")
-                                 return {'success': False, 'message': f"Visual Collision: {msg}", 'debug_log': debug_log}
+                            elif tracking_delta:
+                                _insert_tracked_text(
+                                    page, (ins_x, ins_y), replacement_text,
+                                    fontname=fallback_fontname, fontsize=adjusted_fontsize,
+                                    color=color, tracking_delta=tracking_delta,
+                                    debug_log=debug_log
+                                )
                             else:
-                                 debug_log.append(f"Visual Verification PASSED")
-                                 
-                        except Exception as e:
-                            debug_log.append(f"Visual Verify Exception: {e}")
-                            
-                    success_count += 1
-                except Exception as e:
-                    debug_log.append(f"Err: {e}")
+                                page.insert_text((ins_x, ins_y), replacement_text, fontname=fallback_fontname, fontsize=adjusted_fontsize, color=color)
 
-            if success_count > 0:
-                doc.save(output_path, garbage=4, deflate=True, clean=True)
-                # Invalidate any cached before-state pixmaps for output_path: the
-                # file content has just changed so stale entries must not be reused.
-                _invalidate_file_pixmaps(output_path)
-                return {'success': True, 'modified': True, 'count': success_count, 'debug_log': debug_log}
-            else:
-                return {'success': False, 'message': "No occurrences found or all failed.", 'debug_log': debug_log}
+                    # Apply style simulation after text insertion
+                    # This is critical for preserving bold/italic/decorations when the replacement font
+                    # doesn't have native variants or when decorations need to be redrawn
+                    if is_bold:
+                        try:
+                            # Calculate stroke width based on font size (typically 2-3% of font size)
+                            stroke_width = max(0.2, adjusted_fontsize * 0.025)
+                            _inject_simulated_bold(page, stroke_width=stroke_width)
+                            debug_log.append(f"Applied simulated bold (stroke_width={stroke_width:.2f})")
+                        except Exception as e:
+                            debug_log.append(f"Failed to apply simulated bold: {e}")
+
+                    if is_italic:
+                        try:
+                            # For italic, we need to apply a transformation matrix to skew the text
+                            # This is a bit tricky in PyMuPDF, so we'll use a content stream hack
+                            # Get the last text insertion and apply an italic transform
+                            _inject_simulated_italic(page)
+                            debug_log.append("Applied simulated italic")
+                        except Exception as e:
+                            debug_log.append(f"Failed to apply simulated italic: {e}")
+
+                    # Apply text decorations (underline, strikethrough)
+                    # These need to be drawn after text insertion so they appear on top
+                    if has_underline:
+                        try:
+                            # Measure actual text width for decoration positioning
+                            try:
+                                _dec_font = fitz.Font(use_internal_fontname or fallback_fontname or "helv")
+                                _dec_width = _dec_font.text_length(replacement_text, fontsize=adjusted_fontsize)
+                            except Exception:
+                                _dec_width = len(replacement_text) * adjusted_fontsize * 0.5
+                            text_rect = fitz.Rect(ins_x, rect.y0, ins_x + _dec_width, rect.y1)
+                            _inject_text_underline(page, text_rect, color=color)
+                            debug_log.append("Applied underline decoration")
+                        except Exception as e:
+                            debug_log.append(f"Failed to apply underline: {e}")
+
+                    if has_strikethrough:
+                        try:
+                            # Measure actual text width for decoration positioning
+                            try:
+                                _dec_font = fitz.Font(use_internal_fontname or fallback_fontname or "helv")
+                                _dec_width = _dec_font.text_length(replacement_text, fontsize=adjusted_fontsize)
+                            except Exception:
+                                _dec_width = len(replacement_text) * adjusted_fontsize * 0.5
+                            text_rect = fitz.Rect(ins_x, rect.y0, ins_x + _dec_width, rect.y1)
+                            _inject_text_strikethrough(page, text_rect, color=color)
+                            debug_log.append("Applied strikethrough decoration")
+                        except Exception as e:
+                            debug_log.append(f"Failed to apply strikethrough: {e}")
+                    
+                # --- OPTICAL VERIFICATION ---
+                if 'before_pix' in locals() and before_pix:
+                    try:
+                        # Re-capture 'after' state
+                        after_pix = optical.capture_region(page, verify_rect_est)
+
+                        # BUG #58 FIX: Clear deletion detection logic
+                        # Explicit check for empty replacement (full deletion)
+                        # or replacement much shorter than original (>80% reduction)
+                        replacement_stripped = replacement_text.strip()
+                        target_stripped = target_text.strip()
+
+                        is_full_deletion = len(replacement_stripped) == 0
+                        is_deletion = is_full_deletion or (len(replacement_stripped) < len(target_stripped) * 0.2)
+
+                        if is_deletion:
+                            deletion_type = "full" if is_full_deletion else "partial"
+                            debug_log.append(f"{deletion_type.capitalize()} deletion detected (replacement {len(replacement_text)} chars vs original {len(target_text)} chars) - relaxing collision detection")
+
+                        # Calculate exclusion rect
+                        zoom = 2.0
+                        # Use multiline_rect if available, otherwise reflow_rect, otherwise rect
+                        if multiline_success and multiline_rect is not None:
+                            target_excl = multiline_rect
+                        elif reflow_success and reflow_rect is not None:
+                            target_excl = reflow_rect
+                        else:
+                            target_excl = rect
+
+                        # For deletions, expand exclusion rect to be more generous
+                        if is_deletion:
+                            # Expand by 50% on all sides for deletions
+                            expansion = target_excl.width * 0.5
+                            target_excl = target_excl + (-expansion, -expansion, expansion, expansion)
+
+                        rel_x0 = (target_excl.x0 - verify_rect_est.x0) * zoom
+                        rel_y0 = (target_excl.y0 - verify_rect_est.y0) * zoom
+                        rel_x1 = (target_excl.x1 - verify_rect_est.x0) * zoom
+                        rel_y1 = (target_excl.y1 - verify_rect_est.y0) * zoom
+                        excl_rect = fitz.Rect(rel_x0, rel_y0, rel_x1, rel_y1)
+
+                        if skip_collision:
+                            has_collision = False
+                            msg = "Collision check skipped (user allowed overrun)"
+                            debug_log.append(msg)
+                        else:
+                            has_collision, msg = optical.detect_visual_collision(
+                                before_pix, after_pix,
+                                exclusion_rect=excl_rect,
+                                allow_warning=True       # Allow moderate collisions (5-15%) - common in dense layouts
+                            )
+
+                        # GHOST EDIT HANDLING: Some edits legitimately produce minimal visual changes
+                        # and should not be flagged as failures:
+                        # 1. Identity edits: replacing text with itself
+                        # 2. Shrink edits where replacement is a prefix of original (e.g., "Philadelphia" → "Phila")
+                        # 3. Same-start edits where both texts start the same way
+                        # In these cases, the visual pixels overlap significantly and diff detection fails
+
+                        is_identity_edit = target_text.strip() == replacement_text.strip()
+                        is_prefix_shrink = (
+                            target_text.strip().startswith(replacement_text.strip()) or
+                            replacement_text.strip().startswith(target_text.strip())
+                        )
+                        # Also allow if reflow reported success (trust the lower-level operation)
+                        reflow_confirmed = reflow_success or multiline_success
+
+                        if "Ghost Edit" in msg and (is_identity_edit or is_prefix_shrink or reflow_confirmed):
+                            if is_identity_edit:
+                                debug_log.append(f"Identity edit detected - 'Ghost Edit' is expected behavior")
+                            elif is_prefix_shrink:
+                                debug_log.append(f"Prefix shrink detected - 'Ghost Edit' acceptable for overlapping text")
+                            else:
+                                debug_log.append(f"Reflow succeeded - trusting result despite Ghost Edit detection")
+                            has_collision = False
+
+                        # REFLOW TRUST: For edits where reflow succeeded, trust the operation
+                        # even if optical collision is detected. Reflow has already handled
+                        # the layout properly, and collision detection can have false positives
+                        # when dealing with font substitution, shrink operations, or tight layouts.
+                        if has_collision and reflow_confirmed:
+                            if is_identity_edit:
+                                debug_log.append(f"Identity edit with reflow success - trusting result despite collision ({msg})")
+                            elif is_prefix_shrink:
+                                debug_log.append(f"Shrink edit with reflow success - trusting result despite collision ({msg})")
+                            else:
+                                debug_log.append(f"Edit with reflow success - trusting result despite collision ({msg})")
+                            has_collision = False
+
+                        if has_collision:
+                             debug_log.append(f"Visual Verification FAILED: {msg}")
+                             return {'success': False, 'message': f"Visual Collision: {msg}", 'debug_log': debug_log}
+                        else:
+                             debug_log.append(f"Visual Verification PASSED")
+                                 
+                    except Exception as e:
+                        debug_log.append(f"Visual Verify Exception: {e}")
+                            
+                success_count += 1
+            except Exception as e:
+                debug_log.append(f"Err: {e}")
+
+
+        if success_count > 0:
+            return {'success': True, 'modified': True, 'count': success_count,
+                    'debug_log': debug_log}
+        else:
+            return {'success': False,
+                    'message': "No occurrences found or all failed.",
+                    'debug_log': debug_log}
+
     except Exception as e:
         import traceback
         debug_log.append(traceback.format_exc())
         return {'success': False, 'message': str(e), 'debug_log': debug_log}
+
+
+@monitor_performance("replace_text_in_pdf")
+def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, replacement_text: str, page_number: int = 1, manual_overrides: dict = None, skip_collision: bool = False, occurrence_index: int | None = None) -> dict:
+    """Replace text in a PDF while preserving original font appearance.
+
+    Opens the PDF, delegates all edit logic to
+    :func:`_apply_replace_to_open_doc`, then saves once.
+    """
+    debug_log = []
+    applied_info = {}
+    # Extract skip_collision and occurrence_index from manual_overrides if passed via Swift bridge
+    if manual_overrides and manual_overrides.get('skip_collision'):
+        skip_collision = True
+    if manual_overrides and manual_overrides.get('occurrence_index') is not None:
+        occurrence_index = int(manual_overrides['occurrence_index'])
+    try:
+        if not target_text or not target_text.strip():
+            return {'success': False, 'modified': False, 'message': 'Target text empty', 'debug_log': debug_log}
+
+        # 0. Smart Quotes - only when explicitly requested via manual_overrides
+        if manual_overrides and manual_overrides.get('smart_quotes') and ('"' in replacement_text or "'" in replacement_text):
+            def smarten(text):
+                res, open_d = [], True
+                chars = list(text)
+                for i, char in enumerate(chars):
+                    if char == '"':
+                        res.append('\u201c' if open_d else '\u201d')
+                        open_d = not open_d
+                    elif char == "'":
+                        prev_alnum = res and res[-1].isalnum()
+                        next_alnum = (i + 1 < len(chars)) and chars[i + 1].isalnum()
+                        if prev_alnum:
+                            # mid-word or post-word: apostrophe (e.g. can't, O'Brien)
+                            res.append('\u2019')
+                        elif next_alnum:
+                            # word-initial elision/decade: 'cause, '90s, 'em \u2192 apostrophe
+                            res.append('\u2019')
+                        else:
+                            # genuinely opening a quotation
+                            res.append('\u2018')
+                    else:
+                        res.append(char)
+                return "".join(res)
+            replacement_text = smarten(replacement_text)
+
+        with fitz.open(input_path) as doc:
+            result = _apply_replace_to_open_doc(
+                doc, target_text, replacement_text, page_number,
+                manual_overrides, skip_collision, occurrence_index,
+                src_path_hint=input_path,
+            )
+            if result.get('success') and result.get('modified'):
+                doc.save(output_path, garbage=4, deflate=True, clean=True)
+                # Invalidate any cached before-state pixmaps for output_path: the
+                # file content has just changed so stale entries must not be reused.
+                _invalidate_file_pixmaps(output_path)
+            return result
+
+    except Exception as e:
+        import traceback
+        debug_log.append(traceback.format_exc())
+        return {'success': False, 'message': str(e), 'debug_log': debug_log}
+
 
 
 def _extract_font_to_temp(doc, page, font_name: str) -> str | None:
@@ -6236,6 +6334,7 @@ def scrub_all_metadata(input_path: str, output_path: str, data_dir: str = None) 
 _MAX_BATCH_REPLACEMENTS = 500   # hard cap to prevent resource exhaustion
 _MAX_REGEX_MATCHES_PER_PAGE = 1000
 _MAX_REGEX_PATTERN_LEN = 500
+_REGEX_MATCH_TIMEOUT_S = 5  # hard deadline for per-page regex matching (ReDoS guard)
 
 
 @monitor_performance("batch_replace")
@@ -6245,8 +6344,9 @@ def batch_replace(input_path: str, output_path: str,
     """
     Apply multiple text replacements to a PDF in a single pass.
 
-    Each replacement is processed in order; the output of one becomes the
-    input for the next so that edits accumulate correctly.
+    Each replacement is processed in order; because all edits operate on the
+    same in-memory document, the output of one edit is visible to the next.
+    The document is opened once and saved once (O(1) saves regardless of N).
 
     Args:
         input_path:        Path to the source PDF.
@@ -6261,7 +6361,7 @@ def batch_replace(input_path: str, output_path: str,
     Returns:
         dict with "success", "applied", "skipped", "results", "message".
     """
-    import tempfile, shutil, os
+    import shutil
 
     if not replacements:
         shutil.copy2(input_path, output_path)
@@ -6277,75 +6377,53 @@ def batch_replace(input_path: str, output_path: str,
     results = []
     applied = 0
     skipped = 0
-    current_src = input_path
-    # Track only the *previous* temp file so it can be deleted as soon as we
-    # advance current_src.  Avoids O(N × file_size) disk accumulation.
-    previous_tmp: str | None = None
 
     try:
-        for i, rep in enumerate(replacements):
-            target = rep.get("target_text", "")
-            replacement = rep.get("replacement_text", "")
-            page_number = rep.get("page_number")
-            overrides = rep.get("manual_overrides") or {}
+        with fitz.open(input_path) as doc:
+            for i, rep in enumerate(replacements):
+                target = rep.get("target_text", "")
+                replacement = rep.get("replacement_text", "")
+                page_number = rep.get("page_number")
+                overrides = rep.get("manual_overrides") or {}
 
-            if not target:
-                results.append({"index": i, "success": False, "message": "Empty target_text"})
-                skipped += 1
+                if not target:
+                    results.append({"index": i, "success": False, "message": "Empty target_text"})
+                    skipped += 1
+                    if progress_callback:
+                        progress_callback(i + 1, total)
+                    continue
+
+                if page_number:
+                    pages_to_try = [page_number]
+                else:
+                    pages_to_try = list(range(1, len(doc) + 1))
+
+                rep_result = {"index": i, "success": False, "message": "Not found on any page"}
+                for pg in pages_to_try:
+                    r = _apply_replace_to_open_doc(
+                        doc, target, replacement, pg,
+                        manual_overrides=overrides,
+                        src_path_hint=input_path,
+                    )
+                    if r.get("success"):
+                        rep_result = {"index": i, "success": True, "page": pg,
+                                      "message": r.get("message", "OK")}
+                        applied += 1
+                        break
+
+                if not rep_result["success"]:
+                    skipped += 1
+
+                results.append(rep_result)
+
                 if progress_callback:
                     progress_callback(i + 1, total)
-                continue
 
-            if page_number:
-                pages_to_try = [page_number]
+            if applied > 0:
+                doc.save(output_path, garbage=4, deflate=True, clean=True)
+                _invalidate_file_pixmaps(output_path)
             else:
-                with fitz.open(current_src) as _doc:
-                    pages_to_try = list(range(1, len(_doc) + 1))
-
-            rep_result = {"index": i, "success": False, "message": "Not found on any page"}
-            for pg in pages_to_try:
-                _fd, tmp_out = tempfile.mkstemp(suffix=".pdf", prefix="marcedit_batch_")
-                os.close(_fd)
-
-                r = replace_text_in_pdf(
-                    input_path=current_src,
-                    output_path=tmp_out,
-                    target_text=target,
-                    replacement_text=replacement,
-                    page_number=pg,
-                    manual_overrides=overrides,
-                )
-
-                if r.get("success"):
-                    # Delete the now-superseded intermediate temp file immediately
-                    # to avoid O(N × file_size) disk accumulation.
-                    if previous_tmp and previous_tmp != input_path:
-                        try:
-                            os.unlink(previous_tmp)
-                        except OSError:
-                            pass
-                    previous_tmp = current_src if current_src != input_path else None
-                    current_src = tmp_out
-                    rep_result = {"index": i, "success": True, "page": pg,
-                                  "message": r.get("message", "OK")}
-                    applied += 1
-                    break
-                else:
-                    # This tmp wasn't used — clean it up now.
-                    try:
-                        os.unlink(tmp_out)
-                    except OSError:
-                        pass
-
-            if not rep_result["success"]:
-                skipped += 1
-
-            results.append(rep_result)
-
-            if progress_callback:
-                progress_callback(i + 1, total)
-
-        shutil.copy2(current_src, output_path)
+                shutil.copy2(input_path, output_path)
 
         return {
             "success": True,
@@ -6365,17 +6443,82 @@ def batch_replace(input_path: str, output_path: str,
             "message": f"Batch failed: {e}",
         }
     finally:
-        if previous_tmp and previous_tmp != input_path and previous_tmp != output_path:
-            try:
-                os.unlink(previous_tmp)
-            except OSError:
-                pass
-        if current_src and current_src != input_path and current_src != output_path:
-            try:
-                os.unlink(current_src)
-            except OSError:
-                pass
         gc.collect()
+
+
+_REGEX_CHILD_SCRIPT = r"""
+import sys, json, re
+payload = json.loads(sys.stdin.buffer.read())
+pattern     = payload['pattern']
+flags       = payload['flags']
+text        = payload['text']
+replacement = payload['replacement']
+limit       = payload['limit']
+# Ensure replacement is a string — callers may pass integers via JSON.
+if not isinstance(replacement, str):
+    replacement = str(replacement)
+regex = re.compile(pattern, flags | re.UNICODE)
+results = []
+for m in regex.finditer(text):
+    try:
+        expanded = m.expand(replacement)
+    except Exception:
+        expanded = m.group(0)
+    results.append({
+        'start':    m.start(),
+        'end':      m.end(),
+        'group0':   m.group(0),
+        'expanded': expanded,
+    })
+    if len(results) >= limit:
+        break
+sys.stdout.write(json.dumps(results))
+sys.stdout.flush()
+"""
+
+
+def _regex_match_in_subprocess(pattern: str, flags: int, text: str,
+                                replacement: str, limit: int) -> list:
+    """Run regex finditer in a subprocess with a hard timeout (ReDoS guard).
+
+    Returns a list of dicts ``{start, end, group0, expanded}`` — one per match,
+    capped at *limit*.
+
+    Raises ``TimeoutError`` if the pattern does not complete within
+    ``_REGEX_MATCH_TIMEOUT_S`` seconds (OS kills the child, GIL is irrelevant).
+    Raises ``ValueError`` for other child-process failures.
+    """
+    import subprocess, json, sys as _sys
+
+    payload = json.dumps({
+        'pattern':     pattern,
+        'flags':       flags,
+        'text':        text,
+        'replacement': replacement,
+        'limit':       limit,
+    }).encode('utf-8')
+
+    try:
+        proc = subprocess.run(
+            [_sys.executable, '-c', _REGEX_CHILD_SCRIPT],
+            input=payload,
+            capture_output=True,
+            timeout=_REGEX_MATCH_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(
+            f"Regex match timed out after {_REGEX_MATCH_TIMEOUT_S}s — "
+            "the pattern may cause catastrophic backtracking."
+        )
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode('utf-8', errors='replace').strip()
+        raise ValueError(f"Regex child process failed: {stderr[:200]}")
+
+    try:
+        return json.loads(proc.stdout.decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"Regex child process returned invalid output: {exc}") from exc
 
 
 @monitor_performance("regex_replace")
@@ -6405,7 +6548,7 @@ def regex_replace(input_path: str, output_path: str,
     Returns:
         dict with "success", "replacements", "matches", "message".
     """
-    import re, tempfile, shutil, os
+    import re
 
     if len(pattern) > _MAX_REGEX_PATTERN_LEN:
         return {"success": False, "replacements": 0, "matches": [],
@@ -6431,109 +6574,89 @@ def regex_replace(input_path: str, output_path: str,
 
     matches_log = []
     total_replaced = 0
-    current_src = input_path
-    # Track only the *previous* temp file so it can be deleted as soon as we
-    # advance current_src.  The old O(N) disk accumulation is gone.
-    previous_tmp: str | None = None
 
     try:
-        with fitz.open(input_path) as _doc:
-            total_pages = len(_doc)
+        with fitz.open(input_path) as doc:
+            total_pages = len(doc)
 
-        if page_range:
-            try:
-                start_pg = max(1, int(page_range[0]))
-                end_pg = min(total_pages, int(page_range[1]))
-            except (TypeError, ValueError, IndexError) as _e:
-                return {"success": False, "replacements": 0, "matches": [],
-                        "message": f"Invalid page_range: {_e}"}
-        else:
-            start_pg, end_pg = 1, total_pages
+            if page_range:
+                try:
+                    start_pg = max(1, int(page_range[0]))
+                    end_pg = min(total_pages, int(page_range[1]))
+                except (TypeError, ValueError, IndexError) as _e:
+                    return {"success": False, "replacements": 0, "matches": [],
+                            "message": f"Invalid page_range: {_e}"}
+            else:
+                start_pg, end_pg = 1, total_pages
 
-        for pg in range(start_pg, end_pg + 1):
-            if progress_callback:
-                progress_callback(pg, total_pages)
+            for pg in range(start_pg, end_pg + 1):
+                if progress_callback:
+                    progress_callback(pg, total_pages)
 
-            with fitz.open(current_src) as doc:
                 page_text = doc[pg - 1].get_text("text", flags=fitz.TEXT_PRESERVE_WHITESPACE)
 
-            page_matches = list(regex.finditer(page_text))
-            if len(page_matches) > _MAX_REGEX_MATCHES_PER_PAGE:
-                page_matches = page_matches[:_MAX_REGEX_MATCHES_PER_PAGE]
-                _log.warning("regex_replace match limit hit",
-                             page=pg, limit=_MAX_REGEX_MATCHES_PER_PAGE)
-
-            try:
-                reverse_order = any(
-                    m.group(0) and m.group(0) in m.expand(replacement)
-                    for m in page_matches
+                # Run finditer in a subprocess with a hard timeout (ReDoS guard).
+                # _regex_match_in_subprocess raises TimeoutError on timeout; the
+                # outer except TimeoutError re-raises it so callers can distinguish
+                # a ReDoS timeout from a normal failure — it is NOT converted to an
+                # error dict by the generic except Exception.
+                page_matches = _regex_match_in_subprocess(
+                    pattern, flags | re.UNICODE, page_text, replacement,
+                    _MAX_REGEX_MATCHES_PER_PAGE,
                 )
-            except re.error:
-                reverse_order = False
-            ordered_matches = reversed(page_matches) if reverse_order else page_matches
-            replaced_before_by_text = {}
-
-            for m in ordered_matches:
-                old_text = m.group(0)
-                try:
-                    new_text = m.expand(replacement)
-                except re.error:
-                    # Invalid backreference in replacement — skip this match.
-                    new_text = old_text
-                if old_text == new_text:
-                    continue
-
-                try:
-                    original_occurrence_index = len(list(re.finditer(re.escape(old_text), page_text[:m.start()])))
-                    occurrence_index = original_occurrence_index
-                    if not reverse_order:
-                        occurrence_index = max(
-                            0,
-                            original_occurrence_index - replaced_before_by_text.get(old_text, 0),
-                        )
-                except re.error:
-                    occurrence_index = None
-
-                if occurrence_index is None:
+                if len(page_matches) == _MAX_REGEX_MATCHES_PER_PAGE:
                     _log.warning("regex_replace match limit hit",
-                                 page=pg, target=old_text)
+                                 page=pg, limit=_MAX_REGEX_MATCHES_PER_PAGE)
 
-                _fd, tmp_out = tempfile.mkstemp(suffix=".pdf", prefix="marcedit_regex_")
-                os.close(_fd)
-
-                r = replace_text_in_pdf(
-                    input_path=current_src,
-                    output_path=tmp_out,
-                    target_text=old_text,
-                    replacement_text=new_text,
-                    page_number=pg,
-                    occurrence_index=occurrence_index,
+                # page_matches is now a list of dicts: {start, end, group0, expanded}
+                reverse_order = any(
+                    md['group0'] and md['group0'] in md['expanded']
+                    for md in page_matches
                 )
+                ordered_matches = reversed(page_matches) if reverse_order else page_matches
+                replaced_before_by_text = {}
 
-                if r.get("success"):
-                    # Delete the now-superseded intermediate temp file immediately
-                    # to avoid O(N × file_size) disk accumulation.
-                    if previous_tmp and previous_tmp != input_path:
-                        try:
-                            os.unlink(previous_tmp)
-                        except OSError:
-                            pass
-                    previous_tmp = current_src if current_src != input_path else None
-                    current_src = tmp_out
-                    matches_log.append((pg, old_text, new_text))
-                    total_replaced += 1
-                    if not reverse_order:
-                        replaced_before_by_text[old_text] = (
-                            replaced_before_by_text.get(old_text, 0) + 1
-                        )
-                else:
-                    # This tmp wasn't used — clean it up now.
+                for md in ordered_matches:
+                    old_text = md['group0']
+                    new_text = md['expanded']
+                    if old_text == new_text:
+                        continue
+
                     try:
-                        os.unlink(tmp_out)
-                    except OSError:
-                        pass
+                        original_occurrence_index = len(list(re.finditer(re.escape(old_text), page_text[:md['start']])))
+                        occurrence_index = original_occurrence_index
+                        if not reverse_order:
+                            occurrence_index = max(
+                                0,
+                                original_occurrence_index - replaced_before_by_text.get(old_text, 0),
+                            )
+                    except re.error:
+                        occurrence_index = None
 
-        shutil.copy2(current_src, output_path)
+                    if occurrence_index is None:
+                        _log.warning("regex_replace match limit hit",
+                                     page=pg, target=old_text)
+
+                    r = _apply_replace_to_open_doc(
+                        doc, old_text, new_text, pg,
+                        occurrence_index=occurrence_index,
+                        src_path_hint=input_path,
+                    )
+
+                    if r.get("success"):
+                        matches_log.append((pg, old_text, new_text))
+                        total_replaced += 1
+                        if not reverse_order:
+                            replaced_before_by_text[old_text] = (
+                                replaced_before_by_text.get(old_text, 0) + 1
+                            )
+
+            if total_replaced > 0:
+                doc.save(output_path, garbage=4, deflate=True, clean=True)
+                _invalidate_file_pixmaps(output_path)
+            else:
+                import shutil
+                shutil.copy2(input_path, output_path)
 
         return {
             "success": True,
@@ -6542,6 +6665,11 @@ def regex_replace(input_path: str, output_path: str,
             "message": f"Regex replace complete: {total_replaced} replacements made",
         }
 
+    except TimeoutError:
+        # Let TimeoutError propagate so callers can distinguish a ReDoS timeout
+        # from a normal failure.  (core_xpc wraps this in its own except block.)
+        _log.error("regex_replace timed out (ReDoS guard)")
+        raise
     except Exception as e:
         _log.error("regex_replace failed", error=str(e))
         return {
@@ -6551,17 +6679,6 @@ def regex_replace(input_path: str, output_path: str,
             "message": f"Regex replace failed: {e}",
         }
     finally:
-        # Clean up the last intermediate temp files if they weren't copied to output_path.
-        if previous_tmp and previous_tmp != input_path and previous_tmp != output_path:
-            try:
-                os.unlink(previous_tmp)
-            except OSError:
-                pass
-        if current_src and current_src != input_path and current_src != output_path:
-            try:
-                os.unlink(current_src)
-            except OSError:
-                pass
         gc.collect()
 
 
@@ -6590,7 +6707,7 @@ def apply_template(input_path: str, output_path: str,
     Returns:
         dict with "success", "applied", "not_found", "results", "message".
     """
-    import re, tempfile, shutil, os
+    import re, shutil
 
     if not placeholders:
         shutil.copy2(input_path, output_path)
@@ -6615,58 +6732,53 @@ def apply_template(input_path: str, output_path: str,
     keys_pattern = "|".join(re.escape(k) for k in placeholders)
     token_re = re.compile(f"{escaped_open}({keys_pattern}){escaped_close}")
 
-    current_src = input_path
-    tmp_files = []
     applied = 0
     results = []
     matched_keys = set()
 
     try:
-        with fitz.open(input_path) as _doc:
-            total_pages = len(_doc)
+        with fitz.open(input_path) as doc:
+            total_pages = len(doc)
 
-        if page_range:
-            try:
-                start_pg = max(1, int(page_range[0]))
-                end_pg = min(total_pages, int(page_range[1]))
-            except (TypeError, ValueError, IndexError) as _e:
-                return {"success": False, "applied": 0,
-                        "not_found": list(placeholders.keys()), "results": [],
-                        "message": f"Invalid page_range: {_e}"}
-        else:
-            start_pg, end_pg = 1, total_pages
+            if page_range:
+                try:
+                    start_pg = max(1, int(page_range[0]))
+                    end_pg = min(total_pages, int(page_range[1]))
+                except (TypeError, ValueError, IndexError) as _e:
+                    return {"success": False, "applied": 0,
+                            "not_found": list(placeholders.keys()), "results": [],
+                            "message": f"Invalid page_range: {_e}"}
+            else:
+                start_pg, end_pg = 1, total_pages
 
-        for pg in range(start_pg, end_pg + 1):
-            with fitz.open(current_src) as doc:
+            for pg in range(start_pg, end_pg + 1):
                 page_text = doc[pg - 1].get_text("text", flags=fitz.TEXT_PRESERVE_WHITESPACE)
 
-            for m in token_re.finditer(page_text):
-                key = m.group(1)
-                token = m.group(0)
-                value = str(placeholders[key])
+                for m in token_re.finditer(page_text):
+                    key = m.group(1)
+                    token = m.group(0)
+                    value = str(placeholders[key])
 
-                _fd, tmp_out = tempfile.mkstemp(suffix=".pdf", prefix="marcedit_tmpl_")
-                os.close(_fd)
-                tmp_files.append(tmp_out)
+                    r = _apply_replace_to_open_doc(
+                        doc, token, value, pg,
+                        src_path_hint=input_path,
+                    )
 
-                r = replace_text_in_pdf(
-                    input_path=current_src,
-                    output_path=tmp_out,
-                    target_text=token,
-                    replacement_text=value,
-                    page_number=pg,
-                )
+                    if r.get("success"):
+                        applied += 1
+                        matched_keys.add(key)
+                        results.append({"key": key, "value": value, "page": pg, "success": True})
+                    else:
+                        results.append({"key": key, "value": value, "page": pg, "success": False,
+                                        "message": r.get("message", "")})
 
-                if r.get("success"):
-                    current_src = tmp_out
-                    applied += 1
-                    matched_keys.add(key)
-                    results.append({"key": key, "value": value, "page": pg, "success": True})
-                else:
-                    results.append({"key": key, "value": value, "page": pg, "success": False,
-                                    "message": r.get("message", "")})
+            if applied > 0:
+                doc.save(output_path, garbage=4, deflate=True, clean=True)
+                _invalidate_file_pixmaps(output_path)
+            else:
+                import shutil
+                shutil.copy2(input_path, output_path)
 
-        shutil.copy2(current_src, output_path)
         not_found = [k for k in placeholders if k not in matched_keys]
 
         return {
@@ -6687,10 +6799,4 @@ def apply_template(input_path: str, output_path: str,
             "message": f"Template failed: {e}",
         }
     finally:
-        for f in tmp_files:
-            try:
-                if f != output_path and os.path.exists(f):
-                    os.unlink(f)
-            except OSError:
-                pass
         gc.collect()

@@ -69,6 +69,25 @@ pytest tests/test_editor_core.py tests/test_reflow_synthesizer.py tests/test_per
 - `tests/` — Python tests, visual harness, corpus generator
 - `ignored-resources/sample-files-marcedit/` — real-world test PDFs
 
+## Pre-commit Hook
+
+`Scripts/precommit_checks.sh` is the tracked pre-commit hook. It asserts Python 3.11
+(the version targeted by the bundled framework and CI) and then runs the critical unit
+tests. Install it once per clone:
+
+```bash
+ln -sf "$(git rev-parse --show-toplevel)/Scripts/precommit_checks.sh" \
+       "$(git rev-parse --show-toplevel)/.git/hooks/pre-commit"
+```
+
+The check hard-fails under any non-3.11 interpreter with an actionable message. If you
+see the mismatch error, activate a 3.11 venv (`source .venv/bin/activate`) before
+committing.
+
+## Release
+
+Use `Scripts/sign_notarize_release.sh` — the only supported release path. See `docs/RELEASE_CHECKLIST.md`.
+
 ## Preferences
 
 - Do not auto-commit; always ask before committing.

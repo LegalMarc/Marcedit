@@ -2710,13 +2710,13 @@ final class EditorViewModel: ObservableObject {
             return
         }
         
-        // Securely erase the file (overwrite with 0s) asynchronously
-        Task {
-            do {
-                try await secureErase(at: url)
-            } catch {
-                logger.warning("Failed to securely erase temp file: \(error.localizedDescription)")
-            }
+        // Plain remove: ephemeral app-created temps don't warrant a 3-pass overwrite
+        // (ineffective on APFS/SSD anyway). Secure erase is reserved for the
+        // user-initiated secureEraseCurrentDocument action only.
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            logger.warning("Failed to remove temp file: \(error.localizedDescription)")
         }
     }
 
@@ -2982,15 +2982,15 @@ final class EditorViewModel: ObservableObject {
         // Capture document ID before async operations
         let docIDSnapshot = selectedDocID
 
-        // Wait for any pending preview to complete before confirming
+        // Capture the pending debounce task before clearing the reference.
+        // Do NOT clear previewStashedURL yet — the in-flight task may still need it
+        // to resolve the correct input URL inside its debounce window.
         let pendingTask = previewDebounceTask
         previewDebounceTask = nil
 
-        // Clear stashed URL immediately to prevent race with cancel
-        previewStashedURL = nil
-
         Task {
-            // Ensure pending preview completes before confirming
+            // Await the in-flight debounced preview so it can read previewStashedURL.
+            // Only after it completes is it safe to clear the stash.
             await pendingTask?.value
 
             await MainActor.run {
@@ -2999,9 +2999,9 @@ final class EditorViewModel: ObservableObject {
                     logger.warning("Preview: Confirm aborted - document changed during await")
                     return
                 }
-                // The replacement is already applied - undo items were created during preview
-                // Just mark preview as confirmed (previewStashedURL already cleared above)
-                // previewStashedURL = nil  // Already cleared before await
+                // The replacement is already applied - undo items were created during preview.
+                // Clear the stash now that any in-flight debounced preview has completed.
+                previewStashedURL = nil
                 previewStashedOriginalText = nil  // CRITICAL: Must clear to prevent stale restoration
                 previewPendingText = nil
                 self.previewStatus = .idle

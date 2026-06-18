@@ -26,6 +26,14 @@ test -d "$PWD/build/Marcedit.xcarchive/Products/Applications/Marcedit.app"
 
 ## Signed release path
 
-Use the same archive command without `CODE_SIGNING_ALLOWED=NO` once the signing identity, hardened runtime, entitlements, Developer ID certificate, and notary credentials are configured on the release runner.
+**`Scripts/sign_notarize_release.sh` is the only supported way to produce a distributable build.**
 
-Notarization and stapling should be verified on a clean machine before public-beta distribution.
+The script handles Developer ID signing, `notarytool` submission, stapling, `spctl` gatekeeper verification, and `verify_release_security.py`. Run it instead of invoking `xcodebuild` directly for any release you intend to distribute:
+
+```bash
+Scripts/sign_notarize_release.sh
+```
+
+> **Warning:** a plain `xcodebuild -configuration Release` (or the archive dry run above without the script) yields an **ad-hoc-signed, non-notarizable** app because `project.pbxproj` sets `CODE_SIGN_IDENTITY="-"` and the embedded build phase uses `--timestamp=none`. **Do not distribute a build produced this way.**
+
+Notarization and stapling must be verified on a clean machine before public-beta distribution.

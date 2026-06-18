@@ -192,18 +192,10 @@ def replace_text(
             override_keys = list(manual_overrides.keys())
             warnings.append(f"Using overrides: {', '.join(override_keys)}")
 
-        # Generate output path
+        # Generate output path in the system temp directory (never next to input)
         import tempfile
-        output_dir = os.path.dirname(document_path)
-        base_name = os.path.basename(document_path)
-        name, ext = os.path.splitext(base_name)
-        output_path = os.path.join(output_dir, f"{name}_modified{ext}")
-
-        # If that file exists, use temp file
-        if os.path.exists(output_path):
-            fd, output_path = tempfile.mkstemp(suffix='.pdf', prefix='marcedit_')
-            os.close(fd)
-            warnings.append(f"Output path already exists, using temp file: {os.path.basename(output_path)}")
+        fd, output_path = tempfile.mkstemp(suffix='.pdf', prefix='marcedit_')
+        os.close(fd)
 
         # Call existing replace_text_in_pdf function
         result = core.replace_text_in_pdf(
@@ -467,16 +459,9 @@ def restore_from_memento(document_path: str, memento: dict, validate: bool = Tru
                 'message': f'Size mismatch: expected {original_size} bytes, got {len(content_stream)} bytes'
             }
 
-        # Generate output path
-        output_dir = os.path.dirname(document_path)
-        base_name = os.path.basename(document_path)
-        name, ext = os.path.splitext(base_name)
-        output_path = os.path.join(output_dir, f"{name}_restored{ext}")
-
-        # If that file exists, use temp file
-        if os.path.exists(output_path):
-            fd, output_path = tempfile.mkstemp(suffix='.pdf', prefix='marcedit_restored_')
-            os.close(fd)
+        # Generate output path in the system temp directory (never next to input)
+        fd, output_path = tempfile.mkstemp(suffix='.pdf', prefix='marcedit_restored_')
+        os.close(fd)
 
         # Restore content stream using PyMuPDF's xref manipulation
         with fitz.open(document_path) as doc:
@@ -1123,17 +1108,9 @@ def replace_block_with_spans(
             if overrides.get('justification'):
                 manual_overrides['justification'] = overrides['justification']
 
-        # Generate output path
-        output_dir = os.path.dirname(document_path)
-        base_name = os.path.basename(document_path)
-        name, ext = os.path.splitext(base_name)
-        output_path = os.path.join(output_dir, f"{name}_modified{ext}")
-
-        # If that file exists, use temp file
-        if os.path.exists(output_path):
-            fd, output_path = tempfile.mkstemp(suffix='.pdf', prefix='marcedit_')
-            os.close(fd)
-            warnings.append(f"Output path exists, using temp file: {os.path.basename(output_path)}")
+        # Generate output path in the system temp directory (never next to input)
+        fd, output_path = tempfile.mkstemp(suffix='.pdf', prefix='marcedit_')
+        os.close(fd)
 
         # Call existing replace_block_with_spans function
         result = core.replace_block_with_spans(

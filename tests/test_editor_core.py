@@ -610,5 +610,86 @@ class TestCoreIntegration(unittest.TestCase):
             )
 
 
+_LSQUO = "\u2018"  # U+2018 left single quotation mark  (open-quote)
+_RSQUO = "\u2019"  # U+2019 right single quotation mark (apostrophe / close-quote)
+_LDQUO = "\u201c"  # U+201C left double quotation mark
+_RDQUO = "\u201d"  # U+201D right double quotation mark
+
+
+def _smarten_logic(text):
+    # Replicate the smarten() inner function from core.py for unit-testing (F22).
+    # Must be kept in sync with core.py:smarten() whenever that function changes.
+    lsquo = "\u2018"
+    rsquo = "\u2019"
+    ldquo = "\u201c"
+    rdquo = "\u201d"
+    res, open_d = [], True
+    chars = list(text)
+    for i, char in enumerate(chars):
+        if char == chr(0x22):
+            res.append(ldquo if open_d else rdquo)
+            open_d = not open_d
+        elif char == chr(0x27):
+            prev_alnum = bool(res) and res[-1].isalnum()
+            next_alnum = (i + 1 < len(chars)) and chars[i + 1].isalnum()
+            if prev_alnum:
+                res.append(rsquo)  # mid/post-word apostrophe
+            elif next_alnum:
+                res.append(rsquo)  # word-initial elision/decade
+            else:
+                res.append(lsquo)  # genuine open-quote
+        else:
+            res.append(char)
+    return "".join(res)
+
+
+class TestSmartenWordInitialApostrophe(unittest.TestCase):
+    # Tests for F22: word-initial apostrophe elision/decade handling in smarten().
+
+    def test_word_initial_elision_cause(self):
+        # word-initial elision: 'cause must become U+2019 apostrophe, not U+2018
+        result = _smarten_logic(chr(0x27) + "cause")
+        self.assertEqual(result[0], _RSQUO,
+                         "elision must start with U+2019 apostrophe, got %r" % result)
+
+    def test_word_initial_decade_90s(self):
+        # decade abbreviation: '90s must become U+2019 apostrophe
+        result = _smarten_logic(chr(0x27) + "90s")
+        self.assertEqual(result[0], _RSQUO,
+                         "decade must start with U+2019 apostrophe, got %r" % result)
+
+    def test_word_initial_em(self):
+        # elision: 'em must become U+2019 apostrophe
+        result = _smarten_logic(chr(0x27) + "em")
+        self.assertEqual(result[0], _RSQUO,
+                         "elision em must start with U+2019 apostrophe, got %r" % result)
+
+    def test_word_initial_tis(self):
+        # elision: 'tis must become U+2019 apostrophe
+        result = _smarten_logic(chr(0x27) + "tis")
+        self.assertEqual(result[0], _RSQUO,
+                         "elision tis must start with U+2019 apostrophe, got %r" % result)
+
+    def test_standalone_open_quote(self):
+        # Standalone apostrophe followed by space must become U+2018
+        result = _smarten_logic(chr(0x27) + " ")
+        self.assertEqual(result[0], _LSQUO,
+                         "Standalone quote not followed by alnum must be U+2018, got %r" % result)
+
+    def test_mid_word_apostrophe_cant(self):
+        # can't: mid-word apostrophe must become U+2019
+        result = _smarten_logic("can" + chr(0x27) + "t")
+        self.assertIn(_RSQUO, result,
+                      "cant must contain U+2019, got %r" % result)
+
+    def test_mid_word_apostrophe_obrien(self):
+        # O'Brien: mid-word apostrophe must become U+2019, no U+2018
+        result = _smarten_logic("O" + chr(0x27) + "Brien")
+        self.assertIn(_RSQUO, result,
+                      "OBrien must contain U+2019, got %r" % result)
+        self.assertNotIn(_LSQUO, result,
+                         "OBrien must not contain U+2018, got %r" % result)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

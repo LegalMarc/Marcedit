@@ -212,13 +212,49 @@ def restore_ligatures(text: str, ligature_info: dict) -> str:
 
     result = text
 
-    # Try to restore ligatures at each position
-    # Strategy: If the decomposed form appears in the replacement text,
-    # restore the ligature
-    for pos, end, ligature, decomposed in ligature_info['positions']:
-        # Simple restoration: replace all occurrences
-        # More sophisticated: only replace at similar positions
-        result = result.replace(decomposed, ligature, 1)  # Replace first occurrence
+    # Restore ligatures only at the exact recorded positions.
+    #
+    # ligature_info['positions'] contains (pos, end, ligature, decomposed)
+    # tuples where pos/end are character offsets in the *original* ligatured
+    # text.  When the original is decomposed, each ligature (1 char) expands
+    # to its multi-char form, so every subsequent position in the decomposed
+    # text is shifted forward by (len(decomposed) - 1) for each prior
+    # ligature.  We call this the "expansion shift".
+    #
+    # As we restore ligatures left-to-right in `result` the string shrinks,
+    # so we subtract (len(decomposed) - 1) for each successful restoration.
+    # The two effects cancel: expansion_shift grows +1 per prior original
+    # ligature, and shrinkage grows -1 per restored ligature.  We combine
+    # them into a single running `offset_delta`:
+    #   • +=(len(decomposed) - 1) for each original ligature before this pos
+    #     (expansion from decomposing the original), then
+    #   • -=(len(decomposed) - 1) for each ligature we have already restored
+    #     into result (shrinkage).
+    #
+    # For a 1-to-1 restore path (same text, same positions) those cancel to
+    # zero net shift after each step.  For replacement text that matches only
+    # some positions, the expansion shift accounts for unrestored gaps.
+    #
+    # If the decomposed form is NOT present at the computed position we skip
+    # it — the replacement text simply does not have a matching span there,
+    # and we must not corrupt other words that happen to contain the same
+    # character sequence elsewhere.
+    expansion_shift = 0   # chars added by expanding prior original ligatures
+    restore_shrink = 0    # chars removed by restoring ligatures into result
+    for pos, _end, ligature, decomposed in sorted(
+        ligature_info['positions'], key=lambda x: x[0]
+    ):
+        decomposed_len = len(decomposed)
+        # Position of this span in the decomposed text (before any restoration)
+        decomposed_pos = pos + expansion_shift
+        # Adjust for chars already removed by previous restorations
+        result_pos = decomposed_pos - restore_shrink
+        if result[result_pos:result_pos + decomposed_len] == decomposed:
+            result = result[:result_pos] + ligature + result[result_pos + decomposed_len:]
+            restore_shrink += decomposed_len - 1
+        # Account for this original ligature expanding the decomposed text
+        # regardless of whether we restored it in result.
+        expansion_shift += decomposed_len - 1
 
     return result
 

@@ -849,5 +849,51 @@ class TestConfidentialDiagnostics(unittest.TestCase):
             _cleanup(pdf, bad_font, out)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. regex_replace — ReDoS guard (catastrophic-backtracking deadline)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestRegexReplaceReDoSGuard(unittest.TestCase):
+    """
+    regex_replace must raise TimeoutError (not hang) when given a
+    catastrophic-backtracking pattern.  Acceptance criterion from issue #20:
+    a pattern like (a+)+$ on a long 'a'-string raises within ~6 s.
+    """
+
+    def setUp(self):
+        # Build a PDF whose page text is 'a'*40 followed by 'X' so the
+        # catastrophic pattern (a+)+$ never matches and must backtrack.
+        self.src = _make_pdf("a" * 40 + "X", pages=1)
+        fd, self.dst = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+
+    def tearDown(self):
+        _cleanup(self.src, self.dst)
+
+    def test_catastrophic_backtracking_raises_timeout_error(self):
+        """A ReDoS pattern must raise TimeoutError within ~6 s, not hang."""
+        import time
+        start = time.monotonic()
+        with self.assertRaises(TimeoutError,
+                               msg="Expected TimeoutError for catastrophic-backtracking pattern"):
+            core.regex_replace(self.src, self.dst, r"(a+)+$", "X", flags=0)
+        elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 30,
+                        f"TimeoutError took too long ({elapsed:.1f} s); "
+                        "increase budget or check guard logic")
+
+    def test_normal_pattern_still_returns_success(self):
+        """A safe pattern must complete normally (guard does not over-fire)."""
+        with self.subTest("simple literal replace"):
+            fd, dst2 = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            try:
+                result = core.regex_replace(self.src, dst2, r"X", "Y", flags=0)
+                self.assertTrue(result.get("success"), result)
+                self.assertGreaterEqual(result.get("replacements", 0), 1)
+            finally:
+                _cleanup(dst2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

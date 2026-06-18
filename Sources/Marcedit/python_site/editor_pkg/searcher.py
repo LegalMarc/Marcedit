@@ -16,6 +16,82 @@ import fitz
 from .text_normalize import normalize_text_for_matching, normalize_special_chars
 
 
+def _clip_to_matched_spans(line, target_norm: str, normalize_special_chars_fn, normalize_text_fn):
+    """
+    Given a PyMuPDF dict line and a normalised target string that is a substantial
+    substring of the normalised line text, return the union fitz.Rect of only the
+    spans that contribute to the matched portion.
+
+    Returns a fitz.Rect on success, or None if clipping cannot be computed reliably
+    (caller should fall back to the full line rect in that case).
+
+    Strategy:
+    - Concatenate span texts and normalise the whole string (matching how Strategy 3
+      computes line_norm), so whitespace between spans is preserved correctly.
+    - Attribute each character of the normalised string back to its source span by
+      comparing the normalised length of each prefix of the raw concatenation.
+    - Find the start offset of target_norm in line_norm_reconstructed.
+    - Collect the bboxes of all spans that overlap [match_start, match_end).
+    - Return the union of those bboxes.
+
+    Note: span-level normalisation strips trailing spaces (per-line rstrip in
+    normalize_text_for_matching), which changes character counts vs. the whole-line
+    normalisation.  We therefore normalise the full concatenation and use raw span
+    lengths as approximate span boundaries in the normalised string.
+    """
+    spans = line.get("spans", [])
+    if not spans:
+        return None
+
+    span_bboxes = [span.get("bbox") for span in spans]
+    raw_texts = [span.get("text", "") for span in spans]
+
+    # Normalise the full concatenated line text (same pipeline as Strategy 3)
+    full_raw = "".join(raw_texts)
+    full_norm = normalize_special_chars_fn(normalize_text_fn(full_raw)).lower()
+
+    idx = full_norm.find(target_norm)
+    if idx == -1:
+        # Normalisation produced a different string than the caller used; bail out.
+        return None
+
+    match_start = idx
+    match_end = idx + len(target_norm)
+
+    # Attribute normalised character positions to spans.
+    # We normalise successive prefixes of the raw text to find where each span ends
+    # in the normalised string.  This correctly accounts for ligature expansion and
+    # whitespace collapsing.
+    span_end_positions = []  # normalised char index of the *end* of each span
+    for prefix_len in [sum(len(t) for t in raw_texts[:i+1]) for i in range(len(spans))]:
+        prefix_norm = normalize_special_chars_fn(normalize_text_fn(full_raw[:prefix_len])).lower()
+        span_end_positions.append(len(prefix_norm))
+
+    # Determine which spans overlap [match_start, match_end)
+    involved_span_indices = set()
+    span_start = 0
+    for i, span_end in enumerate(span_end_positions):
+        # Span i covers normalised characters [span_start, span_end)
+        if span_end > match_start and span_start < match_end:
+            involved_span_indices.add(i)
+        span_start = span_end
+
+    rects = []
+    for si in sorted(involved_span_indices):
+        bbox = span_bboxes[si]
+        if bbox:
+            rects.append(fitz.Rect(bbox))
+
+    if not rects:
+        return None
+
+    # Union all involved span rects
+    union = rects[0]
+    for r in rects[1:]:
+        union |= r
+    return union
+
+
 def find(page, target_text: str, return_all: bool = False, diagnostic=None):
     """
     Robust text search that handles invisible characters, whitespace differences,
@@ -28,7 +104,7 @@ def find(page, target_text: str, return_all: bool = False, diagnostic=None):
         return_all: If True, return all matching rects; otherwise return first match
         diagnostic: Optional SearchDiagnostic to capture debug info on failure
     """
-    if not target_text:
+    if not target_text or not target_text.strip():
         if diagnostic:
             diagnostic.add_strategy("Empty target", "SKIPPED")
         return [] if return_all else None
@@ -155,11 +231,22 @@ def find(page, target_text: str, return_all: bool = False, diagnostic=None):
                         continue
                     found_line_rect = fitz.Rect(line_bbox)
 
-                    # Exact or substantial match?
-                    if target_norm == line_norm or len(target_norm) > 0.8 * len(line_norm):
+                    # Exact match: return the whole line rect (accurate)
+                    if target_norm == line_norm:
                         strategy3_found += 1
                         if not return_all: return found_line_rect
                         add_unique([found_line_rect])
+                        continue
+
+                    # Substantial partial match (>80% of line): clip to matched span(s)
+                    if len(target_norm) > 0.8 * len(line_norm):
+                        clipped = _clip_to_matched_spans(
+                            line, target_norm, normalize_special_chars, normalize_text
+                        )
+                        result_rect = clipped if clipped is not None else found_line_rect
+                        strategy3_found += 1
+                        if not return_all: return result_rect
+                        add_unique([result_rect])
                         continue
 
                     # Look for exact span matches within the line

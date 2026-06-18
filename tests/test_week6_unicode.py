@@ -239,10 +239,23 @@ def test_07_restore_ligatures():
     # Test 4: Multiple ligatures
     original_info4 = core.detect_ligatures("ﬁnd the ﬁle")
     restored4 = core.restore_ligatures("find the file", original_info4)
-    # Note: Simple restoration replaces first occurrences
-    assert 'ﬁ' in restored4
+    assert restored4 == "ﬁnd the ﬁle", f"Expected 'ﬁnd the ﬁle', got '{restored4}'"
 
     print(f"  ✓ Multiple ligatures restored")
+
+    # Test 5: Position-exact restoration — must NOT corrupt words that merely
+    # contain the same decomposed sequence as the ligature (F21 regression).
+    # Original has ﬁ only at position 2 (in "deﬁnitive").  The replacement
+    # text "definitive fixation" contains "fi" at positions 2 AND 11.
+    # Only position 2 should be restored; "fixation" must remain untouched.
+    original_info5 = core.detect_ligatures("deﬁnitive")  # ﬁ at pos 2
+    restored5 = core.restore_ligatures("definitive fixation", original_info5)
+    assert restored5 == "deﬁnitive fixation", (
+        f"Expected 'deﬁnitive fixation' (only pos-2 restored), got '{restored5}'"
+    )
+    assert "ﬁxation" not in restored5, "fixation must not be corrupted"
+
+    print(f"  ✓ Position-exact restoration: 'fixation' not corrupted (F21)")
 
 
 

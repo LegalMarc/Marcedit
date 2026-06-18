@@ -31,6 +31,14 @@ FORBIDDEN_ENTITLEMENTS = {
     "com.apple.security.files.downloads.read-write",
     "com.apple.security.files.home-relative-path.read-write",
     "com.apple.security.files.absolute-path.read-write",
+    # Hardened-runtime relaxations that defeat library validation or memory protection
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.allow-dyld-environment-variables",
+    "com.apple.security.cs.disable-executable-page-protection",
+    "com.apple.security.cs.allow-jit",
+    # Debugging entitlement — must never appear in a release build
+    "com.apple.security.get-task-allow",
 }
 
 

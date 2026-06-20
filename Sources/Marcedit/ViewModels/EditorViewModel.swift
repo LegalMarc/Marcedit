@@ -1150,7 +1150,7 @@ final class EditorViewModel: ObservableObject {
                     )
                     self.errorMessage = "Save verification failed (page count mismatch). Your original file has been restored from backup. Please try saving again."
                 } catch {
-                    logger.error("Rollback failed: \(error)")
+                    LogManager.shared.log("Rollback failed: \(error)", level: .error)
                     self.errorMessage = "Save verification failed and rollback also failed. Backup may remain at \(backupURL.path). Do not overwrite the file manually."
                 }
                 return
@@ -1308,7 +1308,7 @@ final class EditorViewModel: ObservableObject {
                 return expandedText
             }
         } catch {
-            logger.error("Paragraph expansion failed: \(error)")
+            LogManager.shared.log("Paragraph expansion failed: \(error)", level: .error)
         }
         return text
     }
@@ -1380,7 +1380,7 @@ final class EditorViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
-                logger.error("Error fetching block spans: \(error)")
+                LogManager.shared.log("Error fetching block spans: \(error)", level: .error)
                 self.continueLineSelection(text: spanText, pageIndex: pageIndex)
             }
         }
@@ -1639,7 +1639,7 @@ final class EditorViewModel: ObservableObject {
                 }
             } catch {
                 self.originalDetectedFont = "Unable to identify font: \(error.localizedDescription)"
-                logger.error("Font identification failed: \(error)")
+                LogManager.shared.log("Font identification failed: \(error)", level: .error)
             }
 
             // Step 2: Run font search (only for non-system fonts)
@@ -1767,7 +1767,7 @@ final class EditorViewModel: ObservableObject {
             }
 
         } catch {
-            logger.error("Interactive font search failed: \(error.localizedDescription)")
+            LogManager.shared.log("Interactive font search failed: \(error.localizedDescription)", level: .error)
             self.searchingFontName = "Error: \(error.localizedDescription)"
             self.isSearchingFonts = false
             self.searchProgress = 0.0
@@ -2434,7 +2434,7 @@ final class EditorViewModel: ObservableObject {
                      }
                 }
             } catch {
-                logger.error("Failed to calculate MD5 for \(url.lastPathComponent): \(error)")
+                LogManager.shared.log("Failed to calculate MD5 for \(url.lastPathComponent): \(error)", level: .error)
             }
         }
     }
@@ -2707,7 +2707,10 @@ final class EditorViewModel: ObservableObject {
                             count += 1
                         }
                     } catch {
-                        errors.append("Failed to erase \(url.lastPathComponent): \(error.localizedDescription)")
+                        // Route the raw error (which may embed absolute paths) through the
+                        // sanitizing log; keep the user-facing toast path-free. See issue #23.
+                        LogManager.shared.log("Secure erase failed for \(url.lastPathComponent): \(error)", level: .error)
+                        errors.append("Failed to erase \(url.lastPathComponent).")
                     }
                 }
 
@@ -2717,7 +2720,10 @@ final class EditorViewModel: ObservableObject {
                         try await secureEraseDirectory(at: dir)
                         count += 1
                     } catch {
-                        errors.append("Failed to erase directory \(dir.lastPathComponent): \(error.localizedDescription)")
+                        // Route the raw error (which may embed absolute paths) through the
+                        // sanitizing log; keep the user-facing toast path-free. See issue #23.
+                        LogManager.shared.log("Secure erase failed for directory \(dir.lastPathComponent): \(error)", level: .error)
+                        errors.append("Failed to erase directory \(dir.lastPathComponent).")
                     }
                 }
 

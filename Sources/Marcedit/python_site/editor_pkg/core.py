@@ -4203,6 +4203,9 @@ def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, rep
         skip_collision = True
     if manual_overrides and manual_overrides.get('occurrence_index') is not None:
         occurrence_index = int(manual_overrides['occurrence_index'])
+    # finalize=True → full optimization (final user-initiated save)
+    # finalize=False (default) → lightweight save for preview/intermediate edits
+    finalize = bool(manual_overrides.get('finalize', False)) if manual_overrides else False
     try:
         if not target_text or not target_text.strip():
             return {'success': False, 'modified': False, 'message': 'Target text empty', 'debug_log': debug_log}
@@ -4240,7 +4243,12 @@ def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, rep
                 src_path_hint=input_path,
             )
             if result.get('success') and result.get('modified'):
-                doc.save(output_path, garbage=4, deflate=True, clean=True)
+                if finalize:
+                    # Final user-initiated save: full PDF optimization
+                    doc.save(output_path, garbage=4, deflate=True, clean=True)
+                else:
+                    # Preview / intermediate edit: lightweight incremental save
+                    doc.save(output_path, garbage=0, deflate=False)
                 # Invalidate any cached before-state pixmaps for output_path: the
                 # file content has just changed so stale entries must not be reused.
                 _invalidate_file_pixmaps(output_path)

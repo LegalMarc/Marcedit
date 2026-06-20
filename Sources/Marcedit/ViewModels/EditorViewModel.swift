@@ -1449,7 +1449,8 @@ final class EditorViewModel: ObservableObject {
                 replacementText: self.editingText,
                 pageIndex: self.editingPageIndex,
                 overrides: self.manualOverrides,
-                showLoading: false
+                showLoading: false,
+                isPreview: true  // Nudge is an intermediate edit; use lightweight save
             )
         }
     }
@@ -1868,6 +1869,9 @@ final class EditorViewModel: ObservableObject {
             if self.allowCollisionOverrun { dict["skip_collision"] = true }
             // Exhaustive font search: honour the global preference set in app Settings
             if UserDefaults.standard.bool(forKey: "exhaustiveFontSearch") { dict["exhaustive_search"] = true }
+            // PERF: Preview/intermediate saves use lightweight flags (garbage=0, deflate=false).
+            // Only final user-initiated replacements produce a fully-optimised PDF.
+            if !isPreview { dict["finalize"] = true }
 
             // PERF: If Swift's background font search already identified the font, pass it
             // directly so Python can skip its own expensive visual-matching phase.
@@ -3045,7 +3049,10 @@ final class EditorViewModel: ObservableObject {
         logger.info("Preview: Cancelled, restored stashed URL")
     }
     
-    /// Confirm preview - keep the replacement, clear stashed state
+    /// Confirm preview - keep the replacement, clear stashed state.
+    /// Re-runs the replacement with finalize=true so the persisted file is fully
+    /// optimized (garbage=4, deflate=True, clean=True) regardless of how many
+    /// lightweight preview saves preceded the confirm.
     func confirmPreview() {
         // Capture document ID before async operations
         let docIDSnapshot = selectedDocID
@@ -3060,6 +3067,33 @@ final class EditorViewModel: ObservableObject {
             // Await the in-flight debounced preview so it can read previewStashedURL.
             // Only after it completes is it safe to clear the stash.
             await pendingTask?.value
+
+            // Capture everything we need for the finalized re-save before clearing state.
+            let (stashedURL, finalEdit, overridesSnapshot) = await MainActor.run { () -> (URL?, EditHistoryItem?, ManualOverrides) in
+                (self.previewStashedURL, self.lastEdit, self.manualOverrides)
+            }
+
+            // Re-run the replacement with isPreview=false (→ finalize=true) so the
+            // on-disk artifact is fully optimized.  We use the stashed URL (pre-edit
+            // original) as input so we always produce a clean, finalized copy.
+            if let stashed = stashedURL, let edit = finalEdit {
+                await MainActor.run {
+                    guard self.selectedDocID == docIDSnapshot else { return }
+                    logger.info("Preview: Confirm — re-running finalized replacement to produce optimized PDF")
+                }
+                // isPreview=false → dict["finalize"]=true → garbage=4/deflate=True/clean=True
+                await self.performReplacement(
+                    inputURL: stashed,
+                    targetText: edit.targetText,
+                    replacementText: edit.replacementText,
+                    pageIndex: edit.pageIndex,
+                    overrides: overridesSnapshot,
+                    showLoading: false,
+                    isPreview: false
+                )
+            } else {
+                logger.warning("Preview: Confirm — no stash or lastEdit available; skipping finalized re-save")
+            }
 
             await MainActor.run {
                 // Verify we're still on the same document

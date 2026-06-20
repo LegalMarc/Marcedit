@@ -128,6 +128,8 @@ final class EditorViewModel: ObservableObject {
     @Published var showUnsavedAlert = false
     @Published var closeActionType: CloseActionType = .quit
     @Published var pendingCloseAction: (() -> Void)?
+    @Published var showRevertAlert = false
+    var pendingRevertID: UUID?
 
     /// Tracks the URL of the content currently displayed in the PDFView.
     private var displayedContentURL: URL?
@@ -1030,10 +1032,35 @@ final class EditorViewModel: ObservableObject {
         }
     }
     
+    /// Title for the revert confirmation alert (used by ContentView).
+    var revertAlertTitle: String {
+        let name = pendingRevertID.flatMap { id in documents.first(where: { $0.id == id })?.name } ?? "this document"
+        return "Discard all unsaved changes to \(name)?"
+    }
+
+    /// Entry point called from UI. Shows a confirmation alert when the document
+    /// has unsaved changes; proceeds immediately if it is clean.
+    func requestRevertFile(_ id: UUID) {
+        guard let doc = documents.first(where: { $0.id == id }) else { return }
+        if doc.isDirty {
+            pendingRevertID = id
+            showRevertAlert = true
+        } else {
+            revertFile(id)
+        }
+    }
+
+    /// Called by the confirmation alert's destructive button.
+    func confirmRevert() {
+        guard let id = pendingRevertID else { return }
+        pendingRevertID = nil
+        revertFile(id)
+    }
+
     func revertFile(_ id: UUID) {
         guard let idx = documents.firstIndex(where: { $0.id == id }) else { return }
         var doc = documents[idx]
-        
+
         if doc.isDirty {
              // Cleanup old temp file
              if doc.currentURL != doc.originalURL {

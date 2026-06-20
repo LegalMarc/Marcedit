@@ -95,6 +95,14 @@ struct ContentView: View {
                  ? "You have unsaved changes. Do you really want to quit?"
                  : "You have unsaved changes. Do you really want to close this document?")
         }
+        .alert(vm.revertAlertTitle,
+               isPresented: $vm.showRevertAlert
+        ) {
+            Button("Cancel", role: .cancel) { vm.pendingRevertID = nil }
+            Button("Discard Changes", role: .destructive) { vm.confirmRevert() }
+        } message: {
+            Text("This will permanently discard all unsaved edits. This action cannot be undone.")
+        }
         .background(invisibleCloseButton)
     }
 }
@@ -413,9 +421,6 @@ extension ContentView {
         ZStack {
             Button("") { if let id = vm.selectedDocID { vm.saveFile(id) } }
                 .keyboardShortcut("s", modifiers: [.command])
-            
-            Button("") { if let id = vm.selectedDocID { vm.revertFile(id) } }
-                .keyboardShortcut("r", modifiers: [.command])
             
             Button("") { vm.undo() }
                 .keyboardShortcut("z", modifiers: [.command])

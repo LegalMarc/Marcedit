@@ -1140,12 +1140,12 @@ final class EditorViewModel: ObservableObject {
             
             logger.info("Saved file: \(doc.name)")
         } catch let error as NSError {
+            LogManager.shared.log("Save failed: \(error)", level: .error)
             if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteNoPermissionError {
                  self.errorMessage = "Permission denied: Cannot save to \(doc.name). Check file permissions."
             } else {
-                 self.errorMessage = "Save failed: \(error.localizedDescription)"
+                 self.errorMessage = "Save failed. Check your file permissions and available disk space."
             }
-            logger.error("Save failed: \(error)")
         }
     }
     
@@ -1191,8 +1191,9 @@ final class EditorViewModel: ObservableObject {
                             logger.info("Exported and updated file")
                         }
                     } catch {
+                        LogManager.shared.log("Export failed: \(error)", level: .error)
                         await MainActor.run {
-                            self.errorMessage = "Export failed: \(error.localizedDescription)"
+                            self.errorMessage = "Export failed. Check your file permissions and available disk space."
                         }
                     }
                 }
@@ -2055,12 +2056,11 @@ final class EditorViewModel: ObservableObject {
 
         } catch {
             if Task.isCancelled { return }
-            let errorDetails = "\(error)"
-            logger.error("Python error: \(errorDetails)")
+            LogManager.shared.log("Python error: \(error)", level: .error)
             if isPreview {
-                self.previewStatus = .otherError(message: "Edit failed: \(errorDetails)")
+                self.previewStatus = .otherError(message: "Edit failed: please retry or restart the app.")
             } else {
-                self.errorMessage = "Edit failed: \(errorDetails)"
+                self.errorMessage = "Edit failed: please retry or restart the app."
             }
         }
     }
@@ -2190,14 +2190,13 @@ final class EditorViewModel: ObservableObject {
                 }
             } catch {
                 if !Task.isCancelled {
-                    let errorDetails = "\(error)"
-                    logger.error("Python error: \(errorDetails)")
-                    self.errorMessage = "Edit failed: \(errorDetails)"
+                    LogManager.shared.log("Python error: \(error)", level: .error)
+                    self.errorMessage = "Edit failed: please retry or restart the app."
                 }
             }
         }
     }
-    
+
     // Apply overrides to currently selected text spans (Paragraph mode)
     func applyOverridesToSelection() {
         guard selectionMode == "paragraph", !editingSpans.isEmpty else { return }
@@ -2344,15 +2343,15 @@ final class EditorViewModel: ObservableObject {
                 }
             } catch {
                 if !Task.isCancelled {
+                    LogManager.shared.log("Flattening exception: \(error)", level: .error)
                     await MainActor.run {
-                        self.errorMessage = "Flattening error: \(error.localizedDescription)"
+                        self.errorMessage = "Flattening failed. Please retry."
                     }
-                    logger.error("Flattening exception: \(error)")
                 }
             }
         }
     }
-    
+
     // MARK: - Metadata & Checksums
     
     func calculateChecksum(for docID: UUID) {
@@ -2454,8 +2453,9 @@ final class EditorViewModel: ObservableObject {
                      }
                  } catch {
                      if !Task.isCancelled {
+                         LogManager.shared.log("Failed to save metadata report: \(error)", level: .error)
                          await MainActor.run {
-                             self.errorMessage = "Failed to save metadata report: \(error.localizedDescription)"
+                             self.errorMessage = "Failed to save the metadata report."
                          }
                      }
                  }

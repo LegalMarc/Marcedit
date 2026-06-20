@@ -97,6 +97,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
+.venv311/
 .env
 tests/visual_harness/output/
 tests/visual_harness/automated_output/

@@ -30,6 +30,11 @@ struct EditLineView: View {
     @State private var loadingTimeExceeded: Bool = false // Shows warning if font search takes too long
     @State private var loadingTimeoutTask: Task<Void, Never>?
 
+    /// Stable local error message for the direct-save path.
+    /// Unlike `vm.errorMessage`, this is NOT observed by ContentView's toast handler,
+    /// so it stays visible in the banner until the user retries or cancels.
+    @State private var directSaveError: String? = nil
+
     // Minimum dimensions
     private let minWidth: Double = 300
     private let minHeight: Double = 150
@@ -472,6 +477,22 @@ struct EditLineView: View {
                 default:
                     EmptyView()
                 }
+            } else if let errorMsg = directSaveError {
+                // Direct-save failure: show error inline so the user can correct and retry.
+                // Keyed on `directSaveError` (local @State) rather than `vm.errorMessage`
+                // so ContentView's toast handler — which clears vm.errorMessage after 4 s —
+                // cannot make this banner vanish while the dialog is still open.
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(errorMsg)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.08))
+                .cornerRadius(8)
             }
 
             // Button bar
@@ -481,6 +502,7 @@ struct EditLineView: View {
                     if vm.isShowingPreview {
                         vm.cancelPreview()
                     }
+                    directSaveError = nil
                     onClose()
                 }
                 .keyboardShortcut(.cancelAction) // Esc
@@ -540,16 +562,34 @@ struct EditLineView: View {
                         vm.confirmPreview()
                         onClose()
                     } else {
-                        // No preview - run the replacement directly via ViewModel
+                        // No preview - run the replacement directly via ViewModel.
                         LogManager.shared.log("EditLineView: Taking direct save path - calling vm.replaceText()")
+                        // Clear any stale local error so a fresh save attempt starts clean.
+                        directSaveError = nil
                         Task {
-                            // Use targetTextForReplacement (immutable) as the original text
-                            // Use vm.editingText which is the single source of truth
-                            // CRITICAL: Use vm.editingPageIndex (source of truth) not stale local pageIndex
-                            await vm.replaceText(original: vm.targetTextForReplacement, newText: vm.editingText, pageIndex: vm.editingPageIndex)
-                            // Close AFTER save completes
+                            // replaceText now awaits its own processingTask and returns true
+                            // only when performReplacement completed without setting errorMessage.
+                            // Use targetTextForReplacement (immutable) as the original text.
+                            // Use vm.editingText which is the single source of truth.
+                            // CRITICAL: Use vm.editingPageIndex (source of truth) not stale local pageIndex.
+                            let succeeded = await vm.replaceText(
+                                original: vm.targetTextForReplacement,
+                                newText: vm.editingText,
+                                pageIndex: vm.editingPageIndex
+                            )
                             await MainActor.run {
-                                onClose()
+                                if succeeded {
+                                    // Replacement completed successfully — close dialog.
+                                    onClose()
+                                } else {
+                                    // Capture the error message into local state so the inline
+                                    // banner stays visible.  ContentView's toast handler observes
+                                    // vm.errorMessage and clears it after 4 s, which would make
+                                    // a vm.errorMessage-keyed banner disappear while the dialog
+                                    // is still open.
+                                    directSaveError = vm.errorMessage
+                                        ?? "Edit failed: please retry or restart the app."
+                                }
                             }
                         }
                     }

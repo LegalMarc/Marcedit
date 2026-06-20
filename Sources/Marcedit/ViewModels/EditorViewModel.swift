@@ -1759,14 +1759,21 @@ final class EditorViewModel: ObservableObject {
 
 
     
-    func replaceText(original: String, newText: String, pageIndex: Int) async {
+    /// Performs a synchronous (non-preview) text replacement and returns `true` when
+    /// the replacement succeeded.  The function does **not** return until
+    /// `performReplacement` has finished, so callers can gate `onClose()` on the
+    /// return value rather than racing against `vm.errorMessage`.
+    @discardableResult
+    func replaceText(original: String, newText: String, pageIndex: Int) async -> Bool {
         if isProcessing {
             LogManager.shared.log("replaceText: already processing, ignoring")
-            return
+            return false
         }
         isProcessing = true
         LogManager.shared.log("replaceText: starting replacement page=\(pageIndex), originalLength=\(original.count), replacementLength=\(newText.count)")
 
+        // Capture errorMessage before the replacement so we can detect a new failure.
+        let priorError = errorMessage
 
         // Wrap work in a task we can explicitly cancel via UI button
         let docIDSnapshot = selectedDocID
@@ -1797,6 +1804,12 @@ final class EditorViewModel: ObservableObject {
                 overrides: self.manualOverrides
              )
         }
+
+        // Await the task so callers observe the real post-replacement state.
+        await self.processingTask?.value
+
+        // Success = no new error was set by performReplacement.
+        return errorMessage == priorError && errorMessage == nil
     }
     
     private func performReplacement(

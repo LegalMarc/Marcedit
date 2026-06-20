@@ -4194,14 +4194,24 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                         # even if optical collision is detected. Reflow has already handled
                         # the layout properly, and collision detection can have false positives
                         # when dealing with font substitution, shrink operations, or tight layouts.
+                        # RESTRICTION (issue #31): Never suppress a genuine major collision (>20%
+                        # overlap). The optical detector signals this with "Major collision" in the
+                        # message. Identity/prefix-shrink edits are structurally safe and remain
+                        # permitted; general reflow trust is limited to minor/moderate overlaps.
+                        is_major_collision = "Major collision" in msg
                         if has_collision and reflow_confirmed:
                             if is_identity_edit:
                                 debug_log.append(f"Identity edit with reflow success - trusting result despite collision ({msg})")
+                                has_collision = False
                             elif is_prefix_shrink:
                                 debug_log.append(f"Shrink edit with reflow success - trusting result despite collision ({msg})")
+                                has_collision = False
+                            elif is_major_collision:
+                                debug_log.append(f"Major collision (>20%) NOT suppressed despite reflow success - real overlap detected ({msg})")
+                                # has_collision stays True → edit will be rejected below
                             else:
-                                debug_log.append(f"Edit with reflow success - trusting result despite collision ({msg})")
-                            has_collision = False
+                                debug_log.append(f"Edit with reflow success - trusting result despite minor/moderate collision ({msg})")
+                                has_collision = False
 
                         if has_collision:
                              debug_log.append(f"Visual Verification FAILED: {msg}")

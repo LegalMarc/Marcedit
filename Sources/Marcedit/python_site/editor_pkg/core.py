@@ -433,13 +433,36 @@ atexit.register(_cleanup_temp_fonts)
 
 
 def _startup_cleanup():
-    """Clean up stale preview fonts from previous sessions."""
+    """Clean up stale temp files from previous sessions.
+
+    Sweeps:
+    - marcedit_preview_*  — transient font extracts (original behaviour)
+    - marcedit_edit_*.pdf — per-edit working copies
+    - marcedit_block_*.pdf — block-edit working copies
+    - <uuid>_flattened.pdf — vector-flatten outputs
+    - <uuid>_scrubbed.pdf  — metadata-scrub outputs
+
+    The flatten/scrub patterns are anchored to a UUID prefix
+    (????????-????-????-????-????????????) to avoid clobbering unrelated
+    third-party files that happen to end in those suffixes.
+    """
     try:
         temp_dir = tempfile.gettempdir()
-        pattern = os.path.join(temp_dir, "marcedit_preview_*")
-        files = glob.glob(pattern)
+        # UUID format: 8-4-4-4-12 hex chars separated by hyphens (Swift UUIDs
+        # are uppercase, but we match case-insensitively via the glob wildcards).
+        _UUID_GLOB = "????????-????-????-????-????????????"
+        patterns = [
+            "marcedit_preview_*",
+            "marcedit_edit_*.pdf",
+            "marcedit_block_*.pdf",
+            f"{_UUID_GLOB}_flattened.pdf",
+            f"{_UUID_GLOB}_scrubbed.pdf",
+        ]
+        files = []
+        for pattern in patterns:
+            files.extend(glob.glob(os.path.join(temp_dir, pattern)))
         if files:
-            print(f"[Core] Cleaning up {len(files)} stale preview font files...")
+            print(f"[Core] Cleaning up {len(files)} stale session temp files...")
             for path in files:
                 try:
                     os.remove(path)

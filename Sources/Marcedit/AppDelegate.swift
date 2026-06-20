@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var isErasureInProgressCheck: (() -> Bool)?
     // Callback to cancel any in-flight processing task on forced quit or app termination
     var cancelProcessingCallback: (() -> Void)?
+    // Callback to delete session temp PDFs (edit/block/flatten/scrub) on quit
+    var cleanupSessionTempsCallback: (() -> Void)?
     
     override init() {
         super.init()
@@ -113,5 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         LogManager.shared.log("App: applicationWillTerminate — cancelling any in-flight processing task")
         cancelProcessingCallback?()
+        LogManager.shared.log("App: applicationWillTerminate — sweeping session temp PDFs")
+        cleanupSessionTempsCallback?()
     }
 }

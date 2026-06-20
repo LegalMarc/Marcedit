@@ -409,6 +409,9 @@ final class EditorViewModel: ObservableObject {
             appDelegate.cancelProcessingCallback = { [weak self] in
                 self?.cancelProcessing()
             }
+            appDelegate.cleanupSessionTempsCallback = { [weak self] in
+                self?.cleanupSessionTemps()
+            }
             logger.info("Termination check registered successfully")
             LogManager.shared.log("Termination check registered successfully via AppDelegate.shared")
         } else {
@@ -2724,12 +2727,12 @@ final class EditorViewModel: ObservableObject {
                            redoStack.contains { $0.inputURL == url || $0.outputURL == url } ||
                            documents.contains { $0.currentURL == url } ||
                            previewStashedURL == url
-        
+
         guard !isReferenced else {
             logger.debug("Skipping cleanup of referenced temp file: \(url.lastPathComponent)")
             return
         }
-        
+
         // Plain remove: ephemeral app-created temps don't warrant a 3-pass overwrite
         // (ineffective on APFS/SSD anyway). Secure erase is reserved for the
         // user-initiated secureEraseCurrentDocument action only.
@@ -2738,6 +2741,51 @@ final class EditorViewModel: ObservableObject {
         } catch {
             logger.warning("Failed to remove temp file: \(error.localizedDescription)")
         }
+    }
+
+    /// Sweep all session-scoped temp PDFs (marcedit_edit_*, marcedit_block_*,
+    /// *_flattened.pdf, *_scrubbed.pdf) created by this session. Called from
+    /// applicationWillTerminate so document content doesn't linger in /var/folders.
+    ///
+    /// NOTE: cleanupTempFile's reference guard intentionally refuses to delete any URL
+    /// still held in undoStack/redoStack/documents/previewStashedURL — which means it
+    /// is a guaranteed no-op here because every URL we would collect IS in those
+    /// collections.  On terminate we want to delete the session temps regardless, so
+    /// we bypass that guard and call FileManager.removeItem directly.  The only URL
+    /// we must NOT delete is a document's originalURL (the user's actual file on disk).
+    func cleanupSessionTemps() {
+        logger.info("cleanupSessionTemps: sweeping undo/redo history and current-doc temp URLs")
+
+        // Build the set of user-owned originals — never delete these.
+        let originalURLs = Set(documents.map { $0.originalURL })
+
+        // Collect all undo/redo history URLs (both input and output may be temps)
+        let historyURLs = (undoStack + redoStack).flatMap { [$0.inputURL, $0.outputURL] }
+
+        // Collect document currentURLs that differ from the user-selected originalURL
+        let docTempURLs = documents.compactMap { doc -> URL? in
+            guard doc.currentURL != doc.originalURL else { return nil }
+            return doc.currentURL
+        }
+
+        // Also include the previewStashedURL
+        let stashedURLs: [URL] = previewStashedURL.map { [$0] } ?? []
+
+        let allTempURLs = (historyURLs + docTempURLs + stashedURLs)
+            .filter { $0.isTemporaryFile && !originalURLs.contains($0) }
+
+        // De-duplicate so each file is removed at most once.
+        let uniqueURLs = Array(Set(allTempURLs))
+        for url in uniqueURLs {
+            do {
+                try FileManager.default.removeItem(at: url)
+                logger.debug("cleanupSessionTemps: removed \(url.lastPathComponent)")
+            } catch {
+                logger.warning("cleanupSessionTemps: failed to remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        logger.info("cleanupSessionTemps: done (removed \(uniqueURLs.count) temp files)")
     }
 
     private func storeFontSearchResults(_ results: [FontSearchResult], for cacheKey: String) {

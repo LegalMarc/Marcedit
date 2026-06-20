@@ -4,53 +4,53 @@ import XCTest
 class MockPythonRunner: PythonRunnerProtocol {
     var availableFontsToReturn: [[String: String]] = []
     var identifyFontReturn: [String: Any] = [:]
-    
+
     // Tracking calls
     var listAvailableFontsCalled = false
     var identifyFontCalled = false
-    
+
     func validateEnvironment() -> (success: Bool, message: String, details: [String : Any]?) {
         return (true, "Mock Valid", nil)
     }
-    
+
     func listAvailableFonts() throws -> [[String : String]] {
         listAvailableFontsCalled = true
         return availableFontsToReturn
     }
-    
+
     func replaceTextInPDF(inputPath: String, outputPath: String, targetText: String, replacementText: String, pageNumber: Int, manualOverrides: [String : Any]?) throws -> (success: Bool, modified: Bool, message: String, appliedInfo: [String : Any]?, substitutionWarning: String?) {
         return (true, true, "Mock replaced", nil, nil)
     }
-    
+
     func identifyFont(inputPath: String, pageNumber: Int, targetText: String) throws -> [String : Any] {
         identifyFontCalled = true
         return identifyFontReturn
     }
-    
+
     func expandToParagraph(inputPath: String, pageNumber: Int, spanText: String) throws -> [String : Any] {
         return [:]
     }
-    
+
     func getBlockSpans(inputPath: String, pageNumber: Int, spanText: String) throws -> (success: Bool, blockBbox: [Double], spans: [[String : Any]], message: String) {
         return (true, [0,0,0,0], [], "Mock")
     }
-    
+
     func replaceBlockWithSpans(inputPath: String, outputPath: String, pageNumber: Int, blockBbox: [Double], spans: [[String : Any]], overrides: [String : Any]?) throws -> (success: Bool, modified: Bool, message: String, debugLog: [String]) {
         return (true, true, "Mock replaced block", [])
     }
-    
+
     func findFontInteractive(inputPath: String, pageIndex: Int, text: String, exhaustive: Bool, callback: @escaping (String, Double) -> Void) throws -> [String : Any]? {
         return nil
     }
-    
+
     func flattenDocument(inputPath: String, outputPath: String) throws -> (success: Bool, message: String, logs: [String]) {
         return (true, "Mock flattened", [])
     }
-    
+
     func scrubMetadata(inputPath: String, outputPath: String, dataDir: String?) -> (success: Bool, message: String, log: [String], reportHTML: String?, extractedFiles: [[String : Any]]?, warnings: [String]) {
         return (true, "Mock scrubbed", [], nil, nil, [])
     }
-    
+
     func extractMetadata(inputPath: String) -> (success: Bool, reportHTML: String?, error: String?) {
         return (true, nil, nil)
     }
@@ -67,18 +67,18 @@ class EditorViewModelTests: XCTestCase {
     }
 
     // MARK: - Tests
-    
+
     @MainActor
     func testFetchFonts_UpdatesAvailableFonts() async {
         mockRunner.availableFontsToReturn = [["name": "TestFont", "path": "/path/to/font"]]
-        
+
         await vm.fetchFonts()
-        
+
         XCTAssertTrue(mockRunner.listAvailableFontsCalled)
         XCTAssertEqual(vm.availableFonts.count, 1)
         XCTAssertEqual(vm.availableFonts.first?["name"], "TestFont")
     }
-    
+
     @MainActor
     func testDetectFont_BlockingFix() async {
         // Bug: Task.detached should be used to avoid blocking Main Thread

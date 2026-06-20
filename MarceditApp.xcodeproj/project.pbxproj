@@ -36,6 +36,7 @@
 /* Begin PBXFileReference section */
 		APP001   /* Marcedit.app */                    = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Marcedit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		TESTTARGETREF /* MarceditUITests.xctest */     = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarceditUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		UTREF001 /* EditorViewModelTests.swift */      = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorViewModelTests.swift; sourceTree = "<group>"; };
 		UITR001 /* TestRunner.swift */                 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestRunner.swift;             sourceTree = "<group>"; };
 		UITR002 /* TestHelpers.swift */                = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHelpers.swift;            sourceTree = "<group>"; };
 		UITR003 /* PDFVerifier.swift */                = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFVerifier.swift;            sourceTree = "<group>"; };
@@ -57,6 +58,7 @@
 			isa = PBXGroup;
 			children = (
 				UITESTGROUP,
+				UTGROUP001,
 				PRODUCTSGROUP,
 			);
 			sourceTree = "<group>";
@@ -68,6 +70,14 @@
 				TESTTARGETREF,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		UTGROUP001 /* MarceditUnitTests (SPM) */ = {
+			isa = PBXGroup;
+			children = (
+				UTREF001,
+			);
+			path = "tests/MarceditUnitTests";
 			sourceTree = "<group>";
 		};
 		UITESTGROUP /* MarceditUITestsUITests */ = {
@@ -186,7 +196,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\nCONFIG=\"debug\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  CONFIG=\"release\"\nfi\n\n# Build Swift package\ncd \"$SRCROOT\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  swift build --configuration \"$CONFIG\" --arch arm64\nelse\n  swift build --configuration \"$CONFIG\"\nfi\n\n# Assemble app bundle\nAPP_DIR=\"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\nMACOS_DIR=\"$APP_DIR/Contents/MacOS\"\nRES_DIR=\"$APP_DIR/Contents/Resources\"\n\nmkdir -p \"$MACOS_DIR\" \"$RES_DIR\"\n\n# Copy binary\ncp \"$SRCROOT/.build/$CONFIG/Marcedit\" \"$MACOS_DIR/Marcedit\"\n\n# Copy resource bundle if present\nBUNDLE=\"$SRCROOT/.build/$CONFIG/Marcedit_Marcedit.bundle\"\nif [ -d \"$BUNDLE\" ]; then\n  rm -rf \"$RES_DIR/Marcedit_Marcedit.bundle\"\n  cp -R \"$BUNDLE\" \"$RES_DIR/Marcedit_Marcedit.bundle\"\n  find \"$RES_DIR/Marcedit_Marcedit.bundle\" -name \"__pycache__\" -type d -prune -exec rm -rf {} +\n  find \"$RES_DIR/Marcedit_Marcedit.bundle\" -name \".DS_Store\" -type f -delete\nfi\n\n# Finder and Launch Services require an app-level .icns file.\nICON_SRC=\"$SRCROOT/Sources/Marcedit/Assets.xcassets/AppIcon.appiconset\"\nICONSET_TMP=\"$DERIVED_FILE_DIR/Marcedit.iconset\"\nif [ -d \"$ICON_SRC\" ]; then\n  rm -rf \"$ICONSET_TMP\"\n  mkdir -p \"$ICONSET_TMP\"\n  cp \"$ICON_SRC\"/icon_*.png \"$ICONSET_TMP\"/\n  iconutil -c icns \"$ICONSET_TMP\" -o \"$RES_DIR/Marcedit.icns\"\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleIconFile Marcedit\" \"$APP_DIR/Contents/Info.plist\" 2>/dev/null || \\\n    /usr/libexec/PlistBuddy -c \"Add :CFBundleIconFile string Marcedit\" \"$APP_DIR/Contents/Info.plist\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  SIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-$CODE_SIGN_IDENTITY}\"\n  if [ -z \"$SIGN_IDENTITY\" ]; then\n    SIGN_IDENTITY=\"-\"\n  fi\n\n  sign_code() {\n    if [ \"$SIGN_IDENTITY\" = \"-\" ]; then\n      codesign --force --sign \"$SIGN_IDENTITY\" --options runtime --timestamp=none \"$1\"\n    else\n      codesign --force --sign \"$SIGN_IDENTITY\" --options runtime --timestamp \"$1\"\n    fi\n  }\n\n  find \"$APP_DIR\" -type f \\( -name \"*.dylib\" -o -name \"*.so\" \\) -print | while IFS= read -r CODE_FILE; do\n    sign_code \"$CODE_FILE\"\n  done\n\n  find \"$APP_DIR\" -type d -name \"*.framework\" -print | sort -r | while IFS= read -r FRAMEWORK_DIR; do\n    sign_code \"$FRAMEWORK_DIR\"\n  done\nfi\n\necho \"SPM build complete → $MACOS_DIR/Marcedit\"\n";
+			shellScript = "set -e\n\nCONFIG=\"debug\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  CONFIG=\"release\"\nfi\n\n# Build Swift package\ncd \"$SRCROOT\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  swift build --configuration \"$CONFIG\" --arch arm64\nelse\n  # Build with testability so @testable import works in the SPM unit test target\n  swift build --configuration \"$CONFIG\" -Xswiftc -enable-testing\n  # Build the SPM unit test target to keep Tests/MarceditUnitTests/ in the build gate\n  swift build --configuration \"$CONFIG\" --build-tests -Xswiftc -enable-testing 2>&1 | grep -E '^(error:|Build complete|warning:)' || true\nfi\n\n# Assemble app bundle\nAPP_DIR=\"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\nMACOS_DIR=\"$APP_DIR/Contents/MacOS\"\nRES_DIR=\"$APP_DIR/Contents/Resources\"\n\nmkdir -p \"$MACOS_DIR\" \"$RES_DIR\"\n\n# Copy binary\ncp \"$SRCROOT/.build/$CONFIG/Marcedit\" \"$MACOS_DIR/Marcedit\"\n\n# Copy resource bundle if present\nBUNDLE=\"$SRCROOT/.build/$CONFIG/Marcedit_Marcedit.bundle\"\nif [ -d \"$BUNDLE\" ]; then\n  rm -rf \"$RES_DIR/Marcedit_Marcedit.bundle\"\n  cp -R \"$BUNDLE\" \"$RES_DIR/Marcedit_Marcedit.bundle\"\n  find \"$RES_DIR/Marcedit_Marcedit.bundle\" -name \"__pycache__\" -type d -prune -exec rm -rf {} +\n  find \"$RES_DIR/Marcedit_Marcedit.bundle\" -name \".DS_Store\" -type f -delete\nfi\n\n# Finder and Launch Services require an app-level .icns file.\nICON_SRC=\"$SRCROOT/Sources/Marcedit/Assets.xcassets/AppIcon.appiconset\"\nICONSET_TMP=\"$DERIVED_FILE_DIR/Marcedit.iconset\"\nif [ -d \"$ICON_SRC\" ]; then\n  rm -rf \"$ICONSET_TMP\"\n  mkdir -p \"$ICONSET_TMP\"\n  cp \"$ICON_SRC\"/icon_*.png \"$ICONSET_TMP\"/\n  iconutil -c icns \"$ICONSET_TMP\" -o \"$RES_DIR/Marcedit.icns\"\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleIconFile Marcedit\" \"$APP_DIR/Contents/Info.plist\" 2>/dev/null || \\\n    /usr/libexec/PlistBuddy -c \"Add :CFBundleIconFile string Marcedit\" \"$APP_DIR/Contents/Info.plist\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  SIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-$CODE_SIGN_IDENTITY}\"\n  if [ -z \"$SIGN_IDENTITY\" ]; then\n    SIGN_IDENTITY=\"-\"\n  fi\n\n  sign_code() {\n    if [ \"$SIGN_IDENTITY\" = \"-\" ]; then\n      codesign --force --sign \"$SIGN_IDENTITY\" --options runtime --timestamp=none \"$1\"\n    else\n      codesign --force --sign \"$SIGN_IDENTITY\" --options runtime --timestamp \"$1\"\n    fi\n  }\n\n  find \"$APP_DIR\" -type f \\( -name \"*.dylib\" -o -name \"*.so\" \\) -print | while IFS= read -r CODE_FILE; do\n    sign_code \"$CODE_FILE\"\n  done\n\n  find \"$APP_DIR\" -type d -name \"*.framework\" -print | sort -r | while IFS= read -r FRAMEWORK_DIR; do\n    sign_code \"$FRAMEWORK_DIR\"\n  done\nfi\n\necho \"SPM build complete → $MACOS_DIR/Marcedit\"\n";
 		};
 		TESTSRCROOT001 /* Write SRCROOT for test corpus lookup */ = {
 			isa = PBXShellScriptBuildPhase;

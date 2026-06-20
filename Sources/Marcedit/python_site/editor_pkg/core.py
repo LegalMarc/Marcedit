@@ -52,6 +52,32 @@ def _get_cached_font(font_path: str) -> object | None:
         return _font_object_cache[font_path]
 
 
+# ── Password-protected PDF guard ──────────────────────────────────────────────
+
+class _PasswordProtectedError(Exception):
+    """Raised by _open_pdf() when a PDF requires a password."""
+
+
+def _open_pdf(path: str) -> "fitz.Document":
+    """Open *path* as a fitz Document and verify it is not password-protected.
+
+    Raises:
+        _PasswordProtectedError: if ``doc.needs_pass`` is True after open.
+        Any fitz exception that fitz.open() itself raises.
+
+    Returns the open fitz.Document.  The caller is responsible for closing it
+    (either via ``doc.close()`` or a ``with`` block).
+    """
+    doc = fitz.open(path)
+    if doc.needs_pass:
+        doc.close()
+        raise _PasswordProtectedError(
+            "This PDF is password-protected. Open it in a PDF reader, "
+            "remove the password, and then edit it in Marcedit."
+        )
+    return doc
+
+
 # ── Pixmap cache (Week 8) ─────────────────────────────────────────────────────
 # Caches the "before" pixmap captures used by collision detection.  Only the
 # before-state snapshot is cached; the after-state is always freshly rendered
@@ -433,13 +459,36 @@ atexit.register(_cleanup_temp_fonts)
 
 
 def _startup_cleanup():
-    """Clean up stale preview fonts from previous sessions."""
+    """Clean up stale temp files from previous sessions.
+
+    Sweeps:
+    - marcedit_preview_*  — transient font extracts (original behaviour)
+    - marcedit_edit_*.pdf — per-edit working copies
+    - marcedit_block_*.pdf — block-edit working copies
+    - <uuid>_flattened.pdf — vector-flatten outputs
+    - <uuid>_scrubbed.pdf  — metadata-scrub outputs
+
+    The flatten/scrub patterns are anchored to a UUID prefix
+    (????????-????-????-????-????????????) to avoid clobbering unrelated
+    third-party files that happen to end in those suffixes.
+    """
     try:
         temp_dir = tempfile.gettempdir()
-        pattern = os.path.join(temp_dir, "marcedit_preview_*")
-        files = glob.glob(pattern)
+        # UUID format: 8-4-4-4-12 hex chars separated by hyphens (Swift UUIDs
+        # are uppercase, but we match case-insensitively via the glob wildcards).
+        _UUID_GLOB = "????????-????-????-????-????????????"
+        patterns = [
+            "marcedit_preview_*",
+            "marcedit_edit_*.pdf",
+            "marcedit_block_*.pdf",
+            f"{_UUID_GLOB}_flattened.pdf",
+            f"{_UUID_GLOB}_scrubbed.pdf",
+        ]
+        files = []
+        for pattern in patterns:
+            files.extend(glob.glob(os.path.join(temp_dir, pattern)))
         if files:
-            print(f"[Core] Cleaning up {len(files)} stale preview font files...")
+            print(f"[Core] Cleaning up {len(files)} stale session temp files...")
             for path in files:
                 try:
                     os.remove(path)
@@ -3775,6 +3824,22 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                             debug_log.append("Reflow Success!")
                         else:
                             debug_log.append("Reflow Failed (returned False)")
+                            # Propagate font-unavailable sentinel: if reflow could not embed or
+                            # synthesize the required font, and the caller has set
+                            # fail_on_font_unavailable, bail out now rather than silently
+                            # inserting Helvetica/Times as a wrong-font substitute.
+                            if (r_rect == "font_unavailable"
+                                    and manual_overrides
+                                    and manual_overrides.get('fail_on_font_unavailable')):
+                                debug_log.append(
+                                    "Font unavailable and fail_on_font_unavailable=True — "
+                                    "aborting edit instead of silently inserting Helvetica."
+                                )
+                                return {
+                                    'success': False,
+                                    'message': 'font_unavailable',
+                                    'debug_log': debug_log,
+                                }
                     except Exception as e:
                         debug_log.append(f"Reflow Exception: {e}")
 
@@ -4129,14 +4194,24 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                         # even if optical collision is detected. Reflow has already handled
                         # the layout properly, and collision detection can have false positives
                         # when dealing with font substitution, shrink operations, or tight layouts.
+                        # RESTRICTION (issue #31): Never suppress a genuine major collision (>20%
+                        # overlap). The optical detector signals this with "Major collision" in the
+                        # message. Identity/prefix-shrink edits are structurally safe and remain
+                        # permitted; general reflow trust is limited to minor/moderate overlaps.
+                        is_major_collision = "Major collision" in msg
                         if has_collision and reflow_confirmed:
                             if is_identity_edit:
                                 debug_log.append(f"Identity edit with reflow success - trusting result despite collision ({msg})")
+                                has_collision = False
                             elif is_prefix_shrink:
                                 debug_log.append(f"Shrink edit with reflow success - trusting result despite collision ({msg})")
+                                has_collision = False
+                            elif is_major_collision:
+                                debug_log.append(f"Major collision (>20%) NOT suppressed despite reflow success - real overlap detected ({msg})")
+                                # has_collision stays True → edit will be rejected below
                             else:
-                                debug_log.append(f"Edit with reflow success - trusting result despite collision ({msg})")
-                            has_collision = False
+                                debug_log.append(f"Edit with reflow success - trusting result despite minor/moderate collision ({msg})")
+                                has_collision = False
 
                         if has_collision:
                              debug_log.append(f"Visual Verification FAILED: {msg}")
@@ -4180,6 +4255,9 @@ def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, rep
         skip_collision = True
     if manual_overrides and manual_overrides.get('occurrence_index') is not None:
         occurrence_index = int(manual_overrides['occurrence_index'])
+    # finalize=True → full optimization (final user-initiated save)
+    # finalize=False (default) → lightweight save for preview/intermediate edits
+    finalize = bool(manual_overrides.get('finalize', False)) if manual_overrides else False
     try:
         if not target_text or not target_text.strip():
             return {'success': False, 'modified': False, 'message': 'Target text empty', 'debug_log': debug_log}
@@ -4210,14 +4288,19 @@ def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, rep
                 return "".join(res)
             replacement_text = smarten(replacement_text)
 
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             result = _apply_replace_to_open_doc(
                 doc, target_text, replacement_text, page_number,
                 manual_overrides, skip_collision, occurrence_index,
                 src_path_hint=input_path,
             )
             if result.get('success') and result.get('modified'):
-                doc.save(output_path, garbage=4, deflate=True, clean=True)
+                if finalize:
+                    # Final user-initiated save: full PDF optimization
+                    doc.save(output_path, garbage=4, deflate=True, clean=True)
+                else:
+                    # Preview / intermediate edit: lightweight incremental save
+                    doc.save(output_path, garbage=0, deflate=False)
                 # Invalidate any cached before-state pixmaps for output_path: the
                 # file content has just changed so stale entries must not be reused.
                 _invalidate_file_pixmaps(output_path)
@@ -4334,7 +4417,7 @@ def identify_font(input_path: str, page_number: int, target_text: str) -> dict:
     For OCR/scanned documents, returns is_ocr=True when page has no text layer.
     """
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             if page_number < 1 or page_number > len(doc):
                 return {
                     'success': False,
@@ -4442,7 +4525,7 @@ def expand_to_paragraph(input_path: str, page_number: int, span_text: str) -> di
         dict with 'expanded_text' containing the full paragraph text
     """
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             if page_number < 1 or page_number > len(doc):
                 return {'expanded_text': span_text, 'message': 'Invalid page number'}
             
@@ -4524,7 +4607,7 @@ def get_block_spans(input_path: str, page_number: int, span_text: str) -> dict:
         }
     """
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             if page_number < 1 or page_number > len(doc):
                 return {'success': False, 'spans': [], 'message': 'Invalid page number'}
             
@@ -4643,7 +4726,7 @@ def replace_block_with_spans(
     debug_log = []
     doc = None
     try:
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
 
         # BUG #53 FIX: Add complete page validation (empty doc check)
         if len(doc) == 0:
@@ -4842,7 +4925,7 @@ def find_font_interactive(input_path: str, page_index: int, target_text: str, ex
 
     doc = None
     try:
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
         if page_index < 0 or page_index >= len(doc):
             yield {'type': 'error', 'message': 'Invalid page index'}
             return
@@ -4982,7 +5065,7 @@ def flatten_document_to_outlines(input_path: str, output_path: str) -> dict:
     doc = None
     out_doc = None
     try:
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
         page_count = len(doc)
         debug_log.append(f"Document has {page_count} pages")
 
@@ -5184,7 +5267,7 @@ def extract_all_metadata(input_path: str) -> dict:
         except Exception as e:
             filesystem_meta['_error'] = str(e)
         
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
 
         result = {
             "success": True,
@@ -6094,7 +6177,7 @@ def scrub_all_metadata(input_path: str, output_path: str, data_dir: str = None) 
             debug_log.append(f"Extracting embedded files to: {data_dir}")
             
             try:
-                doc = fitz.open(input_path)
+                doc = _open_pdf(input_path)
                 try:
                     embfile_count = doc.embfile_count()
 
@@ -6138,7 +6221,7 @@ def scrub_all_metadata(input_path: str, output_path: str, data_dir: str = None) 
                 debug_log.append(f"Embedded file extraction failed: {e}")
         
         # 3. Open document and clear metadata
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             old_metadata = doc.metadata
             debug_log.append(f"Original metadata keys: {list(old_metadata.keys())}")
 
@@ -6379,7 +6462,7 @@ def batch_replace(input_path: str, output_path: str,
     skipped = 0
 
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             for i, rep in enumerate(replacements):
                 target = rep.get("target_text", "")
                 replacement = rep.get("replacement_text", "")
@@ -6576,7 +6659,7 @@ def regex_replace(input_path: str, output_path: str,
     total_replaced = 0
 
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             total_pages = len(doc)
 
             if page_range:
@@ -6737,7 +6820,7 @@ def apply_template(input_path: str, output_path: str,
     matched_keys = set()
 
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             total_pages = len(doc)
 
             if page_range:

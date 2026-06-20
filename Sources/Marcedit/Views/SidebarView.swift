@@ -104,7 +104,7 @@ struct FileRow: View {
             if isSelected { // Only show actions on hover/select, dirty state is shown via dot
                 HStack(spacing: 6) {
                     // Revert
-                    Button(action: { vm.revertFile(doc.id) }) {
+                    Button(action: { vm.requestRevertFile(doc.id) }) {
                         Image(systemName: "arrow.uturn.backward")
                             .font(.caption)
                     }
@@ -160,7 +160,7 @@ struct FileRow: View {
             Button("Save Changes") { vm.saveFile(doc.id) }
                 .disabled(!doc.isDirty)
             Button("Save As...") { vm.exportFile(doc.id) }
-            Button("Revert to Original") { vm.revertFile(doc.id) }
+            Button("Revert to Original") { vm.requestRevertFile(doc.id) }
                 .disabled(!doc.isDirty)
             Divider()
             Button("Reveal in Finder") { vm.revealInFinder(doc.id) }

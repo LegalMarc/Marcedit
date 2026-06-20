@@ -128,6 +128,8 @@ final class EditorViewModel: ObservableObject {
     @Published var showUnsavedAlert = false
     @Published var closeActionType: CloseActionType = .quit
     @Published var pendingCloseAction: (() -> Void)?
+    @Published var showRevertAlert = false
+    var pendingRevertID: UUID?
 
     /// Tracks the URL of the content currently displayed in the PDFView.
     private var displayedContentURL: URL?
@@ -149,6 +151,8 @@ final class EditorViewModel: ObservableObject {
     var lastScrubReportURLs: [UUID: URL] = [:]
     /// Stores the last scrub data directory URL per document ID
     var lastScrubDataDirURLs: [UUID: URL] = [:]
+    /// Stores the last metadata-view report URL per document ID (routed to Application Support)
+    var lastMetadataReportURLs: [UUID: URL] = [:]
 
     @Published var undoStack: [EditHistoryItem] = []
     @Published var redoStack: [EditHistoryItem] = []
@@ -198,6 +202,7 @@ final class EditorViewModel: ObservableObject {
     var editingOriginalText: String { editSession.editingOriginalText }
     var editingText: String { get { editSession.editingText } set { editSession.editingText = newValue } }
     var editingPageIndex: Int { get { editSession.editingPageIndex } set { editSession.editingPageIndex = newValue } }
+    var editingOccurrenceIndex: Int? { get { editSession.editingOccurrenceIndex } set { editSession.editingOccurrenceIndex = newValue } }
     var detectedFont: String? { get { editSession.detectedFont } set { editSession.detectedFont = newValue } }
     var detectedFontName: String? { get { editSession.detectedFontName } set { editSession.detectedFontName = newValue } }
     var detectedFontFlags: Int { get { editSession.detectedFontFlags } set { editSession.detectedFontFlags = newValue } }
@@ -406,6 +411,9 @@ final class EditorViewModel: ObservableObject {
             }
             appDelegate.cancelProcessingCallback = { [weak self] in
                 self?.cancelProcessing()
+            }
+            appDelegate.cleanupSessionTempsCallback = { [weak self] in
+                self?.cleanupSessionTemps()
             }
             logger.info("Termination check registered successfully")
             LogManager.shared.log("Termination check registered successfully via AppDelegate.shared")
@@ -1024,10 +1032,35 @@ final class EditorViewModel: ObservableObject {
         }
     }
     
+    /// Title for the revert confirmation alert (used by ContentView).
+    var revertAlertTitle: String {
+        let name = pendingRevertID.flatMap { id in documents.first(where: { $0.id == id })?.name } ?? "this document"
+        return "Discard all unsaved changes to \(name)?"
+    }
+
+    /// Entry point called from UI. Shows a confirmation alert when the document
+    /// has unsaved changes; proceeds immediately if it is clean.
+    func requestRevertFile(_ id: UUID) {
+        guard let doc = documents.first(where: { $0.id == id }) else { return }
+        if doc.isDirty {
+            pendingRevertID = id
+            showRevertAlert = true
+        } else {
+            revertFile(id)
+        }
+    }
+
+    /// Called by the confirmation alert's destructive button.
+    func confirmRevert() {
+        guard let id = pendingRevertID else { return }
+        pendingRevertID = nil
+        revertFile(id)
+    }
+
     func revertFile(_ id: UUID) {
         guard let idx = documents.firstIndex(where: { $0.id == id }) else { return }
         var doc = documents[idx]
-        
+
         if doc.isDirty {
              // Cleanup old temp file
              if doc.currentURL != doc.originalURL {
@@ -1117,7 +1150,7 @@ final class EditorViewModel: ObservableObject {
                     )
                     self.errorMessage = "Save verification failed (page count mismatch). Your original file has been restored from backup. Please try saving again."
                 } catch {
-                    logger.error("Rollback failed: \(error)")
+                    LogManager.shared.log("Rollback failed: \(error)", level: .error)
                     self.errorMessage = "Save verification failed and rollback also failed. Backup may remain at \(backupURL.path). Do not overwrite the file manually."
                 }
                 return
@@ -1138,12 +1171,12 @@ final class EditorViewModel: ObservableObject {
             
             logger.info("Saved file: \(doc.name)")
         } catch let error as NSError {
+            LogManager.shared.log("Save failed: \(error)", level: .error)
             if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteNoPermissionError {
                  self.errorMessage = "Permission denied: Cannot save to \(doc.name). Check file permissions."
             } else {
-                 self.errorMessage = "Save failed: \(error.localizedDescription)"
+                 self.errorMessage = "Save failed. Check your file permissions and available disk space."
             }
-            logger.error("Save failed: \(error)")
         }
     }
     
@@ -1189,8 +1222,9 @@ final class EditorViewModel: ObservableObject {
                             logger.info("Exported and updated file")
                         }
                     } catch {
+                        LogManager.shared.log("Export failed: \(error)", level: .error)
                         await MainActor.run {
-                            self.errorMessage = "Export failed: \(error.localizedDescription)"
+                            self.errorMessage = "Export failed. Check your file permissions and available disk space."
                         }
                     }
                 }
@@ -1208,16 +1242,16 @@ final class EditorViewModel: ObservableObject {
     
     // MARK: - Selection Handling
     
-    func handleLineSelection(text: String, pageIndex: Int) {
+    func handleLineSelection(text: String, pageIndex: Int, occurrenceIndex: Int? = nil) {
         // SAFE SELECTION: Always use line mode for predictable, single-unit editing
         // The paragraph mode is parked (v0.9-line-paragraph-mode tag) but disabled
         // to provide a simpler, more reliable editing experience.
         //
         // User selects text via drag or click → opens EditLineView for that text only
-        continueLineSelection(text: text, pageIndex: pageIndex)
+        continueLineSelection(text: text, pageIndex: pageIndex, occurrenceIndex: occurrenceIndex)
     }
-    
-    private func continueLineSelection(text: String, pageIndex: Int) {
+
+    private func continueLineSelection(text: String, pageIndex: Int, occurrenceIndex: Int? = nil) {
         // CRITICAL: Cancel stale preview state FIRST, before setting new state
         // This prevents cancelPreview() from restoring stale editingText
         if self.isShowingPreview {
@@ -1228,6 +1262,7 @@ final class EditorViewModel: ObservableObject {
         self.targetTextForReplacement = text  // IMMUTABLE: Used for all replacements during this edit session
         self.editingText = text  // Mutable: User can modify this
         self.editingPageIndex = pageIndex
+        self.editingOccurrenceIndex = occurrenceIndex
         self.detectedFont = nil
         
         // Check if this text was previously edited - restore those overrides
@@ -1273,7 +1308,7 @@ final class EditorViewModel: ObservableObject {
                 return expandedText
             }
         } catch {
-            logger.error("Paragraph expansion failed: \(error)")
+            LogManager.shared.log("Paragraph expansion failed: \(error)", level: .error)
         }
         return text
     }
@@ -1345,7 +1380,7 @@ final class EditorViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
-                logger.error("Error fetching block spans: \(error)")
+                LogManager.shared.log("Error fetching block spans: \(error)", level: .error)
                 self.continueLineSelection(text: spanText, pageIndex: pageIndex)
             }
         }
@@ -1443,7 +1478,8 @@ final class EditorViewModel: ObservableObject {
                 replacementText: self.editingText,
                 pageIndex: self.editingPageIndex,
                 overrides: self.manualOverrides,
-                showLoading: false
+                showLoading: false,
+                isPreview: true  // Nudge is an intermediate edit; use lightweight save
             )
         }
     }
@@ -1603,7 +1639,7 @@ final class EditorViewModel: ObservableObject {
                 }
             } catch {
                 self.originalDetectedFont = "Unable to identify font: \(error.localizedDescription)"
-                logger.error("Font identification failed: \(error)")
+                LogManager.shared.log("Font identification failed: \(error)", level: .error)
             }
 
             // Step 2: Run font search (only for non-system fonts)
@@ -1731,7 +1767,7 @@ final class EditorViewModel: ObservableObject {
             }
 
         } catch {
-            logger.error("Interactive font search failed: \(error.localizedDescription)")
+            LogManager.shared.log("Interactive font search failed: \(error.localizedDescription)", level: .error)
             self.searchingFontName = "Error: \(error.localizedDescription)"
             self.isSearchingFonts = false
             self.searchProgress = 0.0
@@ -1752,14 +1788,21 @@ final class EditorViewModel: ObservableObject {
 
 
     
-    func replaceText(original: String, newText: String, pageIndex: Int) async {
+    /// Performs a synchronous (non-preview) text replacement and returns `true` when
+    /// the replacement succeeded.  The function does **not** return until
+    /// `performReplacement` has finished, so callers can gate `onClose()` on the
+    /// return value rather than racing against `vm.errorMessage`.
+    @discardableResult
+    func replaceText(original: String, newText: String, pageIndex: Int) async -> Bool {
         if isProcessing {
             LogManager.shared.log("replaceText: already processing, ignoring")
-            return
+            return false
         }
         isProcessing = true
         LogManager.shared.log("replaceText: starting replacement page=\(pageIndex), originalLength=\(original.count), replacementLength=\(newText.count)")
 
+        // Capture errorMessage before the replacement so we can detect a new failure.
+        let priorError = errorMessage
 
         // Wrap work in a task we can explicitly cancel via UI button
         let docIDSnapshot = selectedDocID
@@ -1790,6 +1833,12 @@ final class EditorViewModel: ObservableObject {
                 overrides: self.manualOverrides
              )
         }
+
+        // Await the task so callers observe the real post-replacement state.
+        await self.processingTask?.value
+
+        // Success = no new error was set by performReplacement.
+        return errorMessage == priorError && errorMessage == nil
     }
     
     private func performReplacement(
@@ -1862,6 +1911,11 @@ final class EditorViewModel: ObservableObject {
             if self.allowCollisionOverrun { dict["skip_collision"] = true }
             // Exhaustive font search: honour the global preference set in app Settings
             if UserDefaults.standard.bool(forKey: "exhaustiveFontSearch") { dict["exhaustive_search"] = true }
+            // Occurrence targeting: only replace the clicked instance (nil → replace all).
+            if let oi = self.editingOccurrenceIndex { dict["occurrence_index"] = oi }
+            // PERF: Preview/intermediate saves use lightweight flags (garbage=0, deflate=false).
+            // Only final user-initiated replacements produce a fully-optimised PDF.
+            if !isPreview { dict["finalize"] = true }
 
             // PERF: If Swift's background font search already identified the font, pass it
             // directly so Python can skip its own expensive visual-matching phase.
@@ -2053,12 +2107,11 @@ final class EditorViewModel: ObservableObject {
 
         } catch {
             if Task.isCancelled { return }
-            let errorDetails = "\(error)"
-            logger.error("Python error: \(errorDetails)")
+            LogManager.shared.log("Python error: \(error)", level: .error)
             if isPreview {
-                self.previewStatus = .otherError(message: "Edit failed: \(errorDetails)")
+                self.previewStatus = .otherError(message: "Edit failed: please retry or restart the app.")
             } else {
-                self.errorMessage = "Edit failed: \(errorDetails)"
+                self.errorMessage = "Edit failed: please retry or restart the app."
             }
         }
     }
@@ -2188,14 +2241,13 @@ final class EditorViewModel: ObservableObject {
                 }
             } catch {
                 if !Task.isCancelled {
-                    let errorDetails = "\(error)"
-                    logger.error("Python error: \(errorDetails)")
-                    self.errorMessage = "Edit failed: \(errorDetails)"
+                    LogManager.shared.log("Python error: \(error)", level: .error)
+                    self.errorMessage = "Edit failed: please retry or restart the app."
                 }
             }
         }
     }
-    
+
     // Apply overrides to currently selected text spans (Paragraph mode)
     func applyOverridesToSelection() {
         guard selectionMode == "paragraph", !editingSpans.isEmpty else { return }
@@ -2342,15 +2394,15 @@ final class EditorViewModel: ObservableObject {
                 }
             } catch {
                 if !Task.isCancelled {
+                    LogManager.shared.log("Flattening exception: \(error)", level: .error)
                     await MainActor.run {
-                        self.errorMessage = "Flattening error: \(error.localizedDescription)"
+                        self.errorMessage = "Flattening failed. Please retry."
                     }
-                    logger.error("Flattening exception: \(error)")
                 }
             }
         }
     }
-    
+
     // MARK: - Metadata & Checksums
     
     func calculateChecksum(for docID: UUID) {
@@ -2382,7 +2434,7 @@ final class EditorViewModel: ObservableObject {
                      }
                 }
             } catch {
-                logger.error("Failed to calculate MD5 for \(url.lastPathComponent): \(error)")
+                LogManager.shared.log("Failed to calculate MD5 for \(url.lastPathComponent): \(error)", level: .error)
             }
         }
     }
@@ -2427,21 +2479,34 @@ final class EditorViewModel: ObservableObject {
              if Task.isCancelled { return }
              
              if result.success, let html = result.reportHTML {
-                 // Save report next to the PDF (same as Scrub)
-                 let pdfDir = doc.originalURL.deletingLastPathComponent()
+                 // Route report to Application Support — NOT next to the source PDF
+                 // (writing cleartext metadata next to the PDF would deposit it in iCloud/TM).
                  let pdfBaseName = doc.originalURL.deletingPathExtension().lastPathComponent
-                 let reportPath = pdfDir.appendingPathComponent("\(pdfBaseName)_metadata_report.html")
-                 
+                 let appSupportBase: URL = {
+                     let fm = FileManager.default
+                     if let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                         let marcEditDir = dir.appendingPathComponent("Marcedit/MetadataReports", isDirectory: true)
+                         try? fm.createDirectory(at: marcEditDir, withIntermediateDirectories: true)
+                         return marcEditDir
+                     }
+                     return URL(fileURLWithPath: NSTemporaryDirectory())
+                 }()
+                 let sessionID = UUID().uuidString.prefix(8)
+                 let reportPath = appSupportBase.appendingPathComponent("\(pdfBaseName)_\(sessionID)_metadata_report.html")
+
                  do {
                      try html.write(to: reportPath, atomically: true, encoding: .utf8)
-                     
+
                      await MainActor.run {
+                         // Register for Secure Erase
+                         self.lastMetadataReportURLs[id] = reportPath
                          ReportWindowController.openReportWindow(for: reportPath)
                      }
                  } catch {
                      if !Task.isCancelled {
+                         LogManager.shared.log("Failed to save metadata report: \(error)", level: .error)
                          await MainActor.run {
-                             self.errorMessage = "Failed to save metadata report: \(error.localizedDescription)"
+                             self.errorMessage = "Failed to save the metadata report."
                          }
                      }
                  }
@@ -2596,6 +2661,11 @@ final class EditorViewModel: ObservableObject {
                 filesToErase.append(reportURL)
             }
 
+            // 3a. Metadata-view report (routed to Application Support)
+            if let metaReportURL = lastMetadataReportURLs[id] {
+                filesToErase.append(metaReportURL)
+            }
+
             // 4. Scrub data directory (use the saved path so the session-ID suffix matches)
             if let dataDir = lastScrubDataDirURLs[id] {
                 if FileManager.default.fileExists(atPath: dataDir.path) {
@@ -2637,7 +2707,10 @@ final class EditorViewModel: ObservableObject {
                             count += 1
                         }
                     } catch {
-                        errors.append("Failed to erase \(url.lastPathComponent): \(error.localizedDescription)")
+                        // Route the raw error (which may embed absolute paths) through the
+                        // sanitizing log; keep the user-facing toast path-free. See issue #23.
+                        LogManager.shared.log("Secure erase failed for \(url.lastPathComponent): \(error)", level: .error)
+                        errors.append("Failed to erase \(url.lastPathComponent).")
                     }
                 }
 
@@ -2647,7 +2720,10 @@ final class EditorViewModel: ObservableObject {
                         try await secureEraseDirectory(at: dir)
                         count += 1
                     } catch {
-                        errors.append("Failed to erase directory \(dir.lastPathComponent): \(error.localizedDescription)")
+                        // Route the raw error (which may embed absolute paths) through the
+                        // sanitizing log; keep the user-facing toast path-free. See issue #23.
+                        LogManager.shared.log("Secure erase failed for directory \(dir.lastPathComponent): \(error)", level: .error)
+                        errors.append("Failed to erase directory \(dir.lastPathComponent).")
                     }
                 }
 
@@ -2663,9 +2739,10 @@ final class EditorViewModel: ObservableObject {
                 self.redoStack.removeAll { $0.inputURL == doc.originalURL || $0.inputURL == doc.currentURL ||
                                             $0.outputURL == doc.originalURL || $0.outputURL == doc.currentURL }
 
-                // Remove scrub report and data dir references
+                // Remove scrub report, data dir, and metadata-view report references
                 self.lastScrubReportURLs.removeValue(forKey: id)
                 self.lastScrubDataDirURLs.removeValue(forKey: id)
+                self.lastMetadataReportURLs.removeValue(forKey: id)
 
                 // Remove document from list (re-fetch index since array may have changed during await)
                 if let currentIdx = self.documents.firstIndex(where: { $0.id == id }) {
@@ -2704,12 +2781,12 @@ final class EditorViewModel: ObservableObject {
                            redoStack.contains { $0.inputURL == url || $0.outputURL == url } ||
                            documents.contains { $0.currentURL == url } ||
                            previewStashedURL == url
-        
+
         guard !isReferenced else {
             logger.debug("Skipping cleanup of referenced temp file: \(url.lastPathComponent)")
             return
         }
-        
+
         // Plain remove: ephemeral app-created temps don't warrant a 3-pass overwrite
         // (ineffective on APFS/SSD anyway). Secure erase is reserved for the
         // user-initiated secureEraseCurrentDocument action only.
@@ -2718,6 +2795,51 @@ final class EditorViewModel: ObservableObject {
         } catch {
             logger.warning("Failed to remove temp file: \(error.localizedDescription)")
         }
+    }
+
+    /// Sweep all session-scoped temp PDFs (marcedit_edit_*, marcedit_block_*,
+    /// *_flattened.pdf, *_scrubbed.pdf) created by this session. Called from
+    /// applicationWillTerminate so document content doesn't linger in /var/folders.
+    ///
+    /// NOTE: cleanupTempFile's reference guard intentionally refuses to delete any URL
+    /// still held in undoStack/redoStack/documents/previewStashedURL — which means it
+    /// is a guaranteed no-op here because every URL we would collect IS in those
+    /// collections.  On terminate we want to delete the session temps regardless, so
+    /// we bypass that guard and call FileManager.removeItem directly.  The only URL
+    /// we must NOT delete is a document's originalURL (the user's actual file on disk).
+    func cleanupSessionTemps() {
+        logger.info("cleanupSessionTemps: sweeping undo/redo history and current-doc temp URLs")
+
+        // Build the set of user-owned originals — never delete these.
+        let originalURLs = Set(documents.map { $0.originalURL })
+
+        // Collect all undo/redo history URLs (both input and output may be temps)
+        let historyURLs = (undoStack + redoStack).flatMap { [$0.inputURL, $0.outputURL] }
+
+        // Collect document currentURLs that differ from the user-selected originalURL
+        let docTempURLs = documents.compactMap { doc -> URL? in
+            guard doc.currentURL != doc.originalURL else { return nil }
+            return doc.currentURL
+        }
+
+        // Also include the previewStashedURL
+        let stashedURLs: [URL] = previewStashedURL.map { [$0] } ?? []
+
+        let allTempURLs = (historyURLs + docTempURLs + stashedURLs)
+            .filter { $0.isTemporaryFile && !originalURLs.contains($0) }
+
+        // De-duplicate so each file is removed at most once.
+        let uniqueURLs = Array(Set(allTempURLs))
+        for url in uniqueURLs {
+            do {
+                try FileManager.default.removeItem(at: url)
+                logger.debug("cleanupSessionTemps: removed \(url.lastPathComponent)")
+            } catch {
+                logger.warning("cleanupSessionTemps: failed to remove \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        logger.info("cleanupSessionTemps: done (removed \(uniqueURLs.count) temp files)")
     }
 
     private func storeFontSearchResults(_ results: [FontSearchResult], for cacheKey: String) {
@@ -2977,7 +3099,10 @@ final class EditorViewModel: ObservableObject {
         logger.info("Preview: Cancelled, restored stashed URL")
     }
     
-    /// Confirm preview - keep the replacement, clear stashed state
+    /// Confirm preview - keep the replacement, clear stashed state.
+    /// Re-runs the replacement with finalize=true so the persisted file is fully
+    /// optimized (garbage=4, deflate=True, clean=True) regardless of how many
+    /// lightweight preview saves preceded the confirm.
     func confirmPreview() {
         // Capture document ID before async operations
         let docIDSnapshot = selectedDocID
@@ -2992,6 +3117,33 @@ final class EditorViewModel: ObservableObject {
             // Await the in-flight debounced preview so it can read previewStashedURL.
             // Only after it completes is it safe to clear the stash.
             await pendingTask?.value
+
+            // Capture everything we need for the finalized re-save before clearing state.
+            let (stashedURL, finalEdit, overridesSnapshot) = await MainActor.run { () -> (URL?, EditHistoryItem?, ManualOverrides) in
+                (self.previewStashedURL, self.lastEdit, self.manualOverrides)
+            }
+
+            // Re-run the replacement with isPreview=false (→ finalize=true) so the
+            // on-disk artifact is fully optimized.  We use the stashed URL (pre-edit
+            // original) as input so we always produce a clean, finalized copy.
+            if let stashed = stashedURL, let edit = finalEdit {
+                await MainActor.run {
+                    guard self.selectedDocID == docIDSnapshot else { return }
+                    logger.info("Preview: Confirm — re-running finalized replacement to produce optimized PDF")
+                }
+                // isPreview=false → dict["finalize"]=true → garbage=4/deflate=True/clean=True
+                await self.performReplacement(
+                    inputURL: stashed,
+                    targetText: edit.targetText,
+                    replacementText: edit.replacementText,
+                    pageIndex: edit.pageIndex,
+                    overrides: overridesSnapshot,
+                    showLoading: false,
+                    isPreview: false
+                )
+            } else {
+                logger.warning("Preview: Confirm — no stash or lastEdit available; skipping finalized re-save")
+            }
 
             await MainActor.run {
                 // Verify we're still on the same document

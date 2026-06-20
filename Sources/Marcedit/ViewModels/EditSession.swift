@@ -27,6 +27,10 @@ final class EditSession: ObservableObject {
     /// The user's current edited text (may differ from the target).
     @Published var editingText: String = ""
     @Published var editingPageIndex: Int = 0
+    /// 0-based index of the clicked occurrence among same-text matches on the page.
+    /// nil when unknown (e.g. selection came from a code path that cannot derive it),
+    /// which preserves the existing "replace all on page" behaviour.
+    @Published var editingOccurrenceIndex: Int? = nil
 
     // Font detection
     @Published var detectedFont: String? = nil

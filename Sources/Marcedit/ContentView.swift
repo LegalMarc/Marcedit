@@ -95,6 +95,14 @@ struct ContentView: View {
                  ? "You have unsaved changes. Do you really want to quit?"
                  : "You have unsaved changes. Do you really want to close this document?")
         }
+        .alert(vm.revertAlertTitle,
+               isPresented: $vm.showRevertAlert
+        ) {
+            Button("Cancel", role: .cancel) { vm.pendingRevertID = nil }
+            Button("Discard Changes", role: .destructive) { vm.confirmRevert() }
+        } message: {
+            Text("This will permanently discard all unsaved edits. This action cannot be undone.")
+        }
         .background(invisibleCloseButton)
     }
 }
@@ -198,10 +206,10 @@ extension ContentView {
         currentDestination: $vm.currentDestination,
         onLineSelect: { text, pageIdx in
             vm.handleLineSelection(text: text, pageIndex: pageIdx)
-        }, onLineClick: { text, pageIdx in
-            // Drag-to-select and double-click: Same action as single-click
-            // This enables safe selection where user drags to select text
-            vm.handleLineSelection(text: text, pageIndex: pageIdx)
+        }, onLineClick: { text, pageIdx, occIdx in
+            // Drag-to-select and double-click: open edit dialog for the clicked occurrence.
+            // occIdx (0-based) targets only that instance; nil → replace all (back-compat).
+            vm.handleLineSelection(text: text, pageIndex: pageIdx, occurrenceIndex: occIdx)
         }, onKeyDown: { event in
             let amount = event.modifierFlags.contains(.command) ? 1.0 : 0.1
             switch event.keyCode {
@@ -413,9 +421,6 @@ extension ContentView {
         ZStack {
             Button("") { if let id = vm.selectedDocID { vm.saveFile(id) } }
                 .keyboardShortcut("s", modifiers: [.command])
-            
-            Button("") { if let id = vm.selectedDocID { vm.revertFile(id) } }
-                .keyboardShortcut("r", modifiers: [.command])
             
             Button("") { vm.undo() }
                 .keyboardShortcut("z", modifiers: [.command])

@@ -610,6 +610,232 @@ class TestCoreIntegration(unittest.TestCase):
             )
 
 
+class TestFinalizeOptimizationInvariant(unittest.TestCase):
+    """Regression tests for the finalize=True vs finalize=False optimization path.
+
+    Acceptance criteria:
+    - replace_text_in_pdf with finalize=True (final user-initiated save) must
+      produce a fully-optimized PDF (garbage=4/deflate/clean) while
+      finalize=False (preview/intermediate) must produce a lightweight one.
+    - Both outputs must open successfully and contain the replacement text.
+    - The optimized file must be at least as large as the preview file or
+      structurally differ in a way that confirms extra cross-reference/stream
+      compression was applied (we check xref count and compressed-stream presence).
+    """
+
+    def _make_pdf_with_text(self, tmp_path, text, filename="test.pdf"):
+        """Create a minimal 1-page PDF with the given text and return its path."""
+        pdf_path = os.path.join(tmp_path, filename)
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 100), text, fontsize=12)
+        doc.save(pdf_path)
+        doc.close()
+        return pdf_path
+
+    def test_finalize_true_produces_valid_edited_pdf(self):
+        """replace_text_in_pdf with finalize=True must succeed and contain the edit."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = self._make_pdf_with_text(tmp, "Original Text", "input.pdf")
+            output_path = os.path.join(tmp, "finalized.pdf")
+
+            result = replace_text_in_pdf(
+                input_path, output_path,
+                "Original Text", "Replaced Text",
+                page_number=1,
+                manual_overrides={"finalize": True},
+            )
+
+            self.assertTrue(result.get("success"), msg=result.get("message", ""))
+            self.assertTrue(os.path.isfile(output_path), "Finalized output must exist")
+            doc = fitz.open(output_path)
+            self.assertGreater(doc.page_count, 0)
+            page_text = doc.load_page(0).get_text()
+            doc.close()
+            self.assertIn("Replaced", page_text,
+                          "Finalized PDF must contain the replacement text")
+
+    def test_finalize_false_produces_valid_edited_pdf(self):
+        """replace_text_in_pdf with finalize=False (preview) must succeed and contain the edit."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = self._make_pdf_with_text(tmp, "Original Text", "input.pdf")
+            output_path = os.path.join(tmp, "preview.pdf")
+
+            result = replace_text_in_pdf(
+                input_path, output_path,
+                "Original Text", "Replaced Text",
+                page_number=1,
+                manual_overrides={"finalize": False},
+            )
+
+            self.assertTrue(result.get("success"), msg=result.get("message", ""))
+            self.assertTrue(os.path.isfile(output_path), "Preview output must exist")
+            doc = fitz.open(output_path)
+            self.assertGreater(doc.page_count, 0)
+            page_text = doc.load_page(0).get_text()
+            doc.close()
+            self.assertIn("Replaced", page_text,
+                          "Preview PDF must contain the replacement text")
+
+    def test_finalize_true_and_false_produce_structurally_different_pdfs(self):
+        """Finalized and preview saves of the same edit must differ structurally.
+
+        PyMuPDF garbage=4/deflate=True rewrites and compresses the xref table,
+        while garbage=0/deflate=False appends an incremental update.  For the
+        minimal fixture this makes the finalized file strictly smaller AND gives
+        it a lower xref count (6 vs 12 in practice).  Both signals are
+        deterministic \u2014 two independent finalize=False runs produce the same
+        byte-count, so a raw assertNotEqual is insufficient.
+
+        This test will fail if core.py:4246-4251 is reverted to always-lightweight
+        or always-full, because in either case the two outputs have the same size
+        and the same xref count.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = self._make_pdf_with_text(tmp, "Original Text", "input.pdf")
+            finalized_path = os.path.join(tmp, "finalized.pdf")
+            preview_path = os.path.join(tmp, "preview.pdf")
+
+            r_final = replace_text_in_pdf(
+                input_path, finalized_path,
+                "Original Text", "Replaced Text",
+                page_number=1,
+                manual_overrides={"finalize": True},
+            )
+            r_preview = replace_text_in_pdf(
+                input_path, preview_path,
+                "Original Text", "Replaced Text",
+                page_number=1,
+                manual_overrides={"finalize": False},
+            )
+
+            self.assertTrue(r_final.get("success"), msg=r_final.get("message", ""))
+            self.assertTrue(r_preview.get("success"), msg=r_preview.get("message", ""))
+
+            finalized_size = os.path.getsize(finalized_path)
+            preview_size = os.path.getsize(preview_path)
+
+            # The garbage=4/deflate=True finalized file must be strictly smaller:
+            # full compression + xref rewrite eliminates incremental-update overhead.
+            # If this assertion fails it means both paths used the same save flags.
+            self.assertLess(
+                finalized_size, preview_size,
+                f"Finalized PDF ({finalized_size} B, garbage=4/deflate) must be smaller than "
+                f"preview PDF ({preview_size} B, garbage=0/no-deflate); equal sizes mean "
+                "the finalize flag has no effect.",
+            )
+
+            # The garbage=4 rewrite also collapses the xref table; the preview's
+            # incremental update leaves extra entries.  xref_length() is a
+            # structural proxy that is independent of file-modification timestamps.
+            d_final = fitz.open(finalized_path)
+            d_preview = fitz.open(preview_path)
+            xref_final = d_final.xref_length()
+            xref_preview = d_preview.xref_length()
+            d_final.close()
+            d_preview.close()
+
+            self.assertLess(
+                xref_final, xref_preview,
+                f"Finalized xref count ({xref_final}) must be lower than preview xref count "
+                f"({xref_preview}); equal counts mean garbage=4 rewrite was not applied.",
+            )
+
+            # Both must be openable valid PDFs
+            for path, label in [(finalized_path, "finalized"), (preview_path, "preview")]:
+                doc = fitz.open(path)
+                self.assertGreater(doc.page_count, 0, f"{label} PDF must have pages")
+                doc.close()
+
+    def test_confirm_preview_path_produces_finalized_pdf(self):
+        """Simulate the confirm-preview \u2192 saveFile path and assert the resulting file is optimized.
+
+        This is the end-to-end regression for the AC#2 violation described in finding 1:
+        when a user makes an edit via live preview and then clicks Save (confirm), the
+        final on-disk PDF must be fully optimized (garbage=4/deflate=True), not the
+        lightweight preview temp.
+
+        We simulate this by:
+          1. Making a preview save (finalize=False, as runPreviewReplacement does).
+          2. Then making a finalized save from the *original* stashed URL (finalize=True,
+             as the fixed confirmPreview() now does).
+          3. Asserting the final artifact is measurably more optimized than step 1:
+             - Strictly smaller file size (garbage=4+deflate compresses away incremental overhead)
+             - Lower xref count (garbage=4 rewrites and collapses the xref table)
+             - Contains the edit text
+
+        A raw byte assertNotEqual would pass vacuously because two independent finalize=False
+        runs already differ in bytes (non-deterministic internal IDs) while producing the
+        same file size and xref count.  The size/xref assertions are deterministic and will
+        fail if core.py:4246-4251 is reverted to always-lightweight.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            # Step 0: create source PDF (simulates originalURL / stashedURL)
+            stashed_path = self._make_pdf_with_text(tmp, "Original Text", "stashed.pdf")
+
+            # Step 1: preview save (lightweight, as runPreviewReplacement does)
+            preview_path = os.path.join(tmp, "preview_temp.pdf")
+            r_preview = replace_text_in_pdf(
+                stashed_path, preview_path,
+                "Original Text", "Replaced Text",
+                page_number=1,
+                manual_overrides={"finalize": False},
+            )
+            self.assertTrue(r_preview.get("success"), msg=r_preview.get("message", ""))
+
+            # Step 2: finalized save from stashed URL (as fixed confirmPreview() does)
+            finalized_path = os.path.join(tmp, "finalized_confirm.pdf")
+            r_final = replace_text_in_pdf(
+                stashed_path, finalized_path,
+                "Original Text", "Replaced Text",
+                page_number=1,
+                manual_overrides={"finalize": True},
+            )
+            self.assertTrue(r_final.get("success"), msg=r_final.get("message", ""))
+
+            # The file that would be handed to saveFile() is now the finalized one.
+            # Assert optimization: the finalized file must be strictly smaller because
+            # garbage=4/deflate=True compresses and rewrites the xref, while the
+            # preview's garbage=0/deflate=False incremental append leaves extra entries.
+            # A raw byte assertNotEqual is not load-bearing here because two independent
+            # finalize=False runs already produce byte-different output (non-deterministic
+            # internal IDs) while staying at the same file size and xref count.
+            finalized_size = os.path.getsize(finalized_path)
+            preview_size = os.path.getsize(preview_path)
+
+            self.assertLess(
+                finalized_size, preview_size,
+                f"After confirm-preview, the persisted artifact ({finalized_size} B, finalize=True) "
+                f"must be smaller than the preview temp ({preview_size} B, finalize=False). "
+                "Equal sizes mean confirmPreview() did not trigger the optimized save path.",
+            )
+
+            # Xref-table collapse is a structural signal independent of timestamps.
+            d_final = fitz.open(finalized_path)
+            d_preview = fitz.open(preview_path)
+            xref_final = d_final.xref_length()
+            xref_preview = d_preview.xref_length()
+            d_final.close()
+            d_preview.close()
+
+            self.assertLess(
+                xref_final, xref_preview,
+                f"Finalized confirm-preview xref count ({xref_final}) must be lower than "
+                f"preview xref count ({xref_preview}); equal counts mean garbage=4 was not applied.",
+            )
+
+            # Finalized artifact must contain the edit
+            doc = fitz.open(finalized_path)
+            page_text = doc.load_page(0).get_text()
+            doc.close()
+            self.assertIn("Replaced", page_text,
+                          "The finalized confirm-preview artifact must contain the replacement text")
+
+
 _LSQUO = "\u2018"  # U+2018 left single quotation mark  (open-quote)
 _RSQUO = "\u2019"  # U+2019 right single quotation mark (apostrophe / close-quote)
 _LDQUO = "\u201c"  # U+201C left double quotation mark

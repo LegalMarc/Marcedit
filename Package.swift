@@ -27,6 +27,11 @@ let package = Package(
                 .copy("python_site"),
                 .copy("Resources")
             ]
+        ),
+        .testTarget(
+            name: "MarceditUnitTests",
+            dependencies: ["Marcedit"],
+            path: "tests/MarceditUnitTests"
         )
     ]
 )

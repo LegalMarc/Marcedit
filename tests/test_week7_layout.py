@@ -107,22 +107,6 @@ def _make_rotated_text_pdf() -> str:
     return path
 
 
-# ── Test helpers ──────────────────────────────────────────────────────────────
-
-_passed = 0
-_failed = 0
-
-
-def _check(name: str, condition: bool, detail: str = ""):
-    global _passed, _failed
-    if condition:
-        print(f"  ✓  {name}")
-        _passed += 1
-    else:
-        print(f"  ✗  {name}{f' — {detail}' if detail else ''}")
-        _failed += 1
-
-
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 def test_detect_columns_single():
@@ -132,9 +116,8 @@ def test_detect_columns_single():
         with fitz.open(path) as doc:
             page = doc[0]
             cols = core.detect_columns(page)
-        _check("returns a list", isinstance(cols, list))
-        _check("single column → 0 or 1 column rects", len(cols) <= 1,
-               f"got {len(cols)}")
+        assert isinstance(cols, list), "returns a list"
+        assert len(cols) <= 1, f"single column → 0 or 1 column rects; got {len(cols)}"
     finally:
         os.unlink(path)
 
@@ -146,10 +129,10 @@ def test_detect_columns_two():
         with fitz.open(path) as doc:
             page = doc[0]
             cols = core.detect_columns(page)
-        _check("returns a list", isinstance(cols, list))
-        _check("detects 2 columns", len(cols) == 2, f"got {len(cols)}")
+        assert isinstance(cols, list), "returns a list"
+        assert len(cols) == 2, f"detects 2 columns; got {len(cols)}"
         if len(cols) == 2:
-            _check("left col is left of right col", cols[0].x0 < cols[1].x0)
+            assert cols[0].x0 < cols[1].x0, "left col is left of right col"
     finally:
         os.unlink(path)
 
@@ -163,11 +146,11 @@ def test_get_text_rotation_normal():
             raw = page.get_text("dict")
             spans = [sp for b in raw["blocks"] if b["type"] == 0
                      for l in b["lines"] for sp in l["spans"]]
-        _check("at least one span", len(spans) > 0)
+        assert len(spans) > 0, "at least one span"
         if spans:
             angle = core.get_text_rotation(spans[0])
-            _check("returns int", isinstance(angle, int))
-            _check("normal text is 0°", angle == 0, f"got {angle}")
+            assert isinstance(angle, int), "returns int"
+            assert angle == 0, f"normal text is 0°; got {angle}"
     finally:
         os.unlink(path)
 
@@ -175,7 +158,7 @@ def test_get_text_rotation_normal():
 def test_get_text_rotation_empty_span():
     print("\n[get_text_rotation] span without 'dir' key → 0°")
     angle = core.get_text_rotation({})
-    _check("returns 0 for missing dir", angle == 0, f"got {angle}")
+    assert angle == 0, f"returns 0 for missing dir; got {angle}"
 
 
 def test_detect_tables_no_lines():
@@ -185,8 +168,8 @@ def test_detect_tables_no_lines():
         with fitz.open(path) as doc:
             page = doc[0]
             tables = core.detect_tables(page)
-        _check("returns list", isinstance(tables, list))
-        _check("no tables on plain text page", len(tables) == 0, f"got {len(tables)}")
+        assert isinstance(tables, list), "returns list"
+        assert len(tables) == 0, f"no tables on plain text page; got {len(tables)}"
     finally:
         os.unlink(path)
 
@@ -198,17 +181,17 @@ def test_detect_tables_grid():
         with fitz.open(path) as doc:
             page = doc[0]
             tables = core.detect_tables(page)
-        _check("returns list", isinstance(tables, list))
-        _check("detects at least one table", len(tables) >= 1, f"got {len(tables)}")
+        assert isinstance(tables, list), "returns list"
+        assert len(tables) >= 1, f"detects at least one table; got {len(tables)}"
         if tables:
             t = tables[0]
-            _check("table has 'rect'", "rect" in t)
-            _check("table has 'rows'", "rows" in t)
-            _check("table has 'cols'", "cols" in t)
-            _check("table has 'cells'", "cells" in t)
-            _check("3 rows detected", t["rows"] == 3, f"got {t['rows']}")
-            _check("3 cols detected", t["cols"] == 3, f"got {t['cols']}")
-            _check("9 cells", len(t["cells"]) == 9, f"got {len(t['cells'])}")
+            assert "rect" in t, "table has 'rect'"
+            assert "rows" in t, "table has 'rows'"
+            assert "cols" in t, "table has 'cols'"
+            assert "cells" in t, "table has 'cells'"
+            assert t["rows"] == 3, f"3 rows detected; got {t['rows']}"
+            assert t["cols"] == 3, f"3 cols detected; got {t['cols']}"
+            assert len(t["cells"]) == 9, f"9 cells; got {len(t['cells'])}"
     finally:
         os.unlink(path)
 
@@ -220,12 +203,11 @@ def test_get_reading_order_single():
         with fitz.open(path) as doc:
             page = doc[0]
             ordered = core.get_reading_order(page)
-        _check("returns list", isinstance(ordered, list))
-        _check("has blocks", len(ordered) > 0)
+        assert isinstance(ordered, list), "returns list"
+        assert len(ordered) > 0, "has blocks"
         # Verify top-to-bottom ordering
         ys = [b["bbox"][1] for b in ordered]
-        _check("y-coordinates non-decreasing", ys == sorted(ys),
-               f"out-of-order: {ys}")
+        assert ys == sorted(ys), f"y-coordinates non-decreasing; out-of-order: {ys}"
     finally:
         os.unlink(path)
 
@@ -237,12 +219,11 @@ def test_get_reading_order_two_column():
         with fitz.open(path) as doc:
             page = doc[0]
             ordered = core.get_reading_order(page)
-        _check("has blocks", len(ordered) > 0)
+        assert len(ordered) > 0, "has blocks"
         # First block should be in left column (x0 < 250)
         if ordered:
-            _check("first block is in left column",
-                   ordered[0]["bbox"][0] < 250,
-                   f"x0={ordered[0]['bbox'][0]:.1f}")
+            assert ordered[0]["bbox"][0] < 250, \
+                f"first block is in left column; x0={ordered[0]['bbox'][0]:.1f}"
     finally:
         os.unlink(path)
 
@@ -258,13 +239,12 @@ def test_detect_layout_context_single():
                     "has_tables", "dominant_rotation", "has_rotated_text",
                     "column_index", "rect_rotation"]
         for key in required:
-            _check(f"has key '{key}'", key in ctx)
-        _check("layout_type is 'single_column'",
-               ctx["layout_type"] == "single_column",
-               f"got '{ctx['layout_type']}'")
-        _check("dominant_rotation is 0", ctx["dominant_rotation"] == 0,
-               f"got {ctx['dominant_rotation']}")
-        _check("has_rotated_text is False", ctx["has_rotated_text"] is False)
+            assert key in ctx, f"has key '{key}'"
+        assert ctx["layout_type"] == "single_column", \
+            f"layout_type is 'single_column'; got '{ctx['layout_type']}'"
+        assert ctx["dominant_rotation"] == 0, \
+            f"dominant_rotation is 0; got {ctx['dominant_rotation']}"
+        assert ctx["has_rotated_text"] is False, "has_rotated_text is False"
     finally:
         os.unlink(path)
 
@@ -276,11 +256,10 @@ def test_detect_layout_context_two_column():
         with fitz.open(path) as doc:
             page = doc[0]
             ctx = core.detect_layout_context(page)
-        _check("layout_type is 'multi_column'",
-               ctx["layout_type"] == "multi_column",
-               f"got '{ctx['layout_type']}'")
-        _check("column_count is 2", ctx["column_count"] == 2,
-               f"got {ctx['column_count']}")
+        assert ctx["layout_type"] == "multi_column", \
+            f"layout_type is 'multi_column'; got '{ctx['layout_type']}'"
+        assert ctx["column_count"] == 2, \
+            f"column_count is 2; got {ctx['column_count']}"
     finally:
         os.unlink(path)
 
@@ -294,9 +273,8 @@ def test_detect_layout_context_with_rect():
             # Focus on the left column
             left_rect = fitz.Rect(72, 80, 300, 200)
             ctx = core.detect_layout_context(page, left_rect)
-        _check("column_index is 0 (left column)",
-               ctx["column_index"] == 0,
-               f"got {ctx['column_index']}")
+        assert ctx["column_index"] == 0, \
+            f"column_index is 0 (left column); got {ctx['column_index']}"
     finally:
         os.unlink(path)
 
@@ -308,10 +286,9 @@ def test_detect_layout_context_table():
         with fitz.open(path) as doc:
             page = doc[0]
             ctx = core.detect_layout_context(page)
-        _check("has_tables is True", ctx["has_tables"] is True)
-        _check("layout_type is 'table' or 'mixed'",
-               ctx["layout_type"] in ("table", "mixed"),
-               f"got '{ctx['layout_type']}'")
+        assert ctx["has_tables"] is True, "has_tables is True"
+        assert ctx["layout_type"] in ("table", "mixed"), \
+            f"layout_type is 'table' or 'mixed'; got '{ctx['layout_type']}'"
     finally:
         os.unlink(path)
 
@@ -322,8 +299,8 @@ def test_detect_layout_context_error_resilience():
     page = doc.new_page(width=612, height=792)
     try:
         ctx = core.detect_layout_context(page)
-        _check("returns dict on empty page", isinstance(ctx, dict))
-        _check("layout_type present", "layout_type" in ctx)
+        assert isinstance(ctx, dict), "returns dict on empty page"
+        assert "layout_type" in ctx, "layout_type present"
     finally:
         doc.close()
 
@@ -331,6 +308,7 @@ def test_detect_layout_context_error_resilience():
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 def main():
+    """Direct-run entry point (pytest is the preferred runner)."""
     print("=" * 60)
     print("Week 7 Day 2 — Layout Detection Tests")
     print("=" * 60)
@@ -351,20 +329,22 @@ def main():
         test_detect_layout_context_error_resilience,
     ]
 
+    passed = 0
+    failed = 0
     for t in tests:
         try:
             t()
+            passed += 1
         except Exception:
             print(f"  ✗  {t.__name__} raised an exception:")
             traceback.print_exc()
-            global _failed
-            _failed += 1
+            failed += 1
 
     print("\n" + "=" * 60)
-    print(f"Results: {_passed} passed, {_failed} failed  "
-          f"({_passed}/{_passed + _failed})")
+    print(f"Results: {passed} passed, {failed} failed  "
+          f"({passed}/{passed + failed})")
     print("=" * 60)
-    return 0 if _failed == 0 else 1
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":

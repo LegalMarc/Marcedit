@@ -73,22 +73,6 @@ def _make_pdf(texts: list, cols: int = 1) -> str:
     return path
 
 
-# ── Test helpers ──────────────────────────────────────────────────────────────
-
-_passed = 0
-_failed = 0
-
-
-def _check(name: str, condition: bool, detail: str = ""):
-    global _passed, _failed
-    if condition:
-        print(f"  ✓  {name}")
-        _passed += 1
-    else:
-        print(f"  ✗  {name}{f' — {detail}' if detail else ''}")
-        _failed += 1
-
-
 def _tmp_dst() -> str:
     fd, p = tempfile.mkstemp(suffix=".pdf")
     os.close(fd)
@@ -102,13 +86,13 @@ def test_analyze_layout_single_column():
     src = _make_pdf(["Line one", "Line two", "Line three", "Line four"])
     try:
         result = core_xpc.analyze_layout(src, 0)
-        _check("success", result["success"] is True, str(result))
-        _check("has layout_type", "layout_type" in result)
-        _check("column_count >= 1", result["column_count"] >= 1)
-        _check("columns is list", isinstance(result["columns"], list))
-        _check("tables is list", isinstance(result["tables"], list))
-        _check("dominant_rotation in {0,90,180,270}",
-               result["dominant_rotation"] in (0, 90, 180, 270))
+        assert result["success"] is True, f"success; {result}"
+        assert "layout_type" in result, "has layout_type"
+        assert result["column_count"] >= 1, "column_count >= 1"
+        assert isinstance(result["columns"], list), "columns is list"
+        assert isinstance(result["tables"], list), "tables is list"
+        assert result["dominant_rotation"] in (0, 90, 180, 270), \
+            "dominant_rotation in {0,90,180,270}"
     finally:
         os.unlink(src)
 
@@ -122,12 +106,10 @@ def test_analyze_layout_two_column():
     )
     try:
         result = core_xpc.analyze_layout(src, 0)
-        _check("success", result["success"] is True)
-        _check("column_count == 2", result["column_count"] == 2,
-               f"got {result['column_count']}")
-        _check("layout_type is multi_column",
-               result["layout_type"] == "multi_column",
-               f"got {result['layout_type']}")
+        assert result["success"] is True, "success"
+        assert result["column_count"] == 2, f"column_count == 2; got {result['column_count']}"
+        assert result["layout_type"] == "multi_column", \
+            f"layout_type is multi_column; got {result['layout_type']}"
     finally:
         os.unlink(src)
 
@@ -142,11 +124,10 @@ def test_analyze_layout_with_focus_rect():
     try:
         # Focus on the left column area
         result = core_xpc.analyze_layout(src, 0, rect=[72, 70, 280, 200])
-        _check("success", result["success"] is True)
-        _check("column_index is not None", result["column_index"] is not None)
-        _check("column_index == 0 (left col)",
-               result["column_index"] == 0,
-               f"got {result['column_index']}")
+        assert result["success"] is True, "success"
+        assert result["column_index"] is not None, "column_index is not None"
+        assert result["column_index"] == 0, \
+            f"column_index == 0 (left col); got {result['column_index']}"
     finally:
         os.unlink(src)
 
@@ -156,7 +137,7 @@ def test_analyze_layout_bad_page_index():
     src = _make_pdf(["Some text"])
     try:
         result = core_xpc.analyze_layout(src, 999)
-        _check("success is False", result["success"] is False)
+        assert result["success"] is False, "success is False"
     finally:
         os.unlink(src)
 
@@ -165,12 +146,12 @@ def test_analyze_layout_real_pdf():
     print("\n[analyze_layout] real-world PDF")
     pdf = _find_sample_pdf()
     if not pdf:
-        print("  –  skipped (no sample PDFs found)")
+        print("  -  skipped (no sample PDFs found)")
         return
     result = core_xpc.analyze_layout(pdf, 0)
-    _check("success", result["success"] is True, str(result))
-    _check("layout_type present", "layout_type" in result)
-    _check("column_count >= 1", result.get("column_count", 0) >= 1)
+    assert result["success"] is True, f"success; {result}"
+    assert "layout_type" in result, "layout_type present"
+    assert result.get("column_count", 0) >= 1, "column_count >= 1"
 
 
 # ── batch_replace_text ────────────────────────────────────────────────────────
@@ -181,9 +162,9 @@ def test_batch_replace_empty():
     dst = _tmp_dst()
     try:
         r = core_xpc.batch_replace_text(src, dst, [])
-        _check("success", r["success"] is True)
-        _check("applied == 0", r["applied"] == 0)
-        _check("output file exists", os.path.getsize(dst) > 0)
+        assert r["success"] is True, "success"
+        assert r["applied"] == 0, "applied == 0"
+        assert os.path.getsize(dst) > 0, "output file exists"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -197,12 +178,12 @@ def test_batch_replace_single():
                  "replacement_text": "Replaced",
                  "page_index": 0}]
         r = core_xpc.batch_replace_text(src, dst, reps)
-        _check("success", r["success"] is True, str(r.get("message")))
-        _check("applied == 1", r["applied"] == 1, f"got {r['applied']}")
+        assert r["success"] is True, f"success; {r.get('message')}"
+        assert r["applied"] == 1, f"applied == 1; got {r['applied']}"
         # Verify text is in output
         with fitz.open(dst) as out_doc:
             page_text = out_doc[0].get_text()
-        _check("output contains 'Replaced'", "Replaced" in page_text)
+        assert "Replaced" in page_text, "output contains 'Replaced'"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -217,8 +198,8 @@ def test_batch_replace_multiple():
             {"target_text": "Beta item",  "replacement_text": "Beta done"},
         ]
         r = core_xpc.batch_replace_text(src, dst, reps)
-        _check("success", r["success"] is True)
-        _check("applied == 2", r["applied"] == 2, f"got {r['applied']}")
+        assert r["success"] is True, "success"
+        assert r["applied"] == 2, f"applied == 2; got {r['applied']}"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -231,9 +212,9 @@ def test_batch_replace_limit_enforced():
         reps = [{"target_text": f"t{i}", "replacement_text": f"r{i}"}
                 for i in range(501)]
         r = core_xpc.batch_replace_text(src, dst, reps)
-        _check("success is False", r["success"] is False)
-        _check("message mentions limit", "max" in r.get("message", "").lower(),
-               f"got: {r.get('message')}")
+        assert r["success"] is False, "success is False"
+        assert "max" in r.get("message", "").lower(), \
+            f"message mentions limit; got: {r.get('message')}"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -256,13 +237,13 @@ def test_batch_replace_page_index_conversion():
                  "replacement_text": "P1 replaced",
                  "page_index": 0}]
         r = core_xpc.batch_replace_text(src, dst, reps)
-        _check("success", r["success"] is True, str(r))
-        _check("applied == 1", r["applied"] == 1)
+        assert r["success"] is True, f"success; {r}"
+        assert r["applied"] == 1, "applied == 1"
         with fitz.open(dst) as out:
             p0_text = out[0].get_text()
             p1_text = out[1].get_text()
-        _check("page 0 updated", "P1 replaced" in p0_text)
-        _check("page 1 unchanged", "Page two text" in p1_text)
+        assert "P1 replaced" in p0_text, "page 0 updated"
+        assert "Page two text" in p1_text, "page 1 unchanged"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -275,8 +256,8 @@ def test_regex_replace_invalid_pattern():
     dst = _tmp_dst()
     try:
         r = core_xpc.regex_replace_text(src, dst, "[bad(", "x")
-        _check("success is False", r["success"] is False)
-        _check("message present", bool(r.get("message")))
+        assert r["success"] is False, "success is False"
+        assert bool(r.get("message")), "message present"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -287,7 +268,7 @@ def test_regex_replace_pattern_too_long():
     dst = _tmp_dst()
     try:
         r = core_xpc.regex_replace_text(src, dst, "a" * 501, "b")
-        _check("success is False", r["success"] is False)
+        assert r["success"] is False, "success is False"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -298,8 +279,8 @@ def test_regex_replace_no_match():
     dst = _tmp_dst()
     try:
         r = core_xpc.regex_replace_text(src, dst, r"ZZZZZZ", "x")
-        _check("success", r["success"] is True)
-        _check("replacements == 0", r["replacements"] == 0)
+        assert r["success"] is True, "success"
+        assert r["replacements"] == 0, "replacements == 0"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -313,9 +294,8 @@ def test_regex_replace_case_insensitive():
                                         r"hello world from marcedit",
                                         "Done",
                                         ignore_case=True)
-        _check("success", r["success"] is True)
-        _check("1 replacement", r["replacements"] == 1,
-               f"got {r['replacements']}")
+        assert r["success"] is True, "success"
+        assert r["replacements"] == 1, f"1 replacement; got {r['replacements']}"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -336,14 +316,11 @@ def test_regex_replace_page_range():
         r = core_xpc.regex_replace_text(src, dst,
                                         r"TARGET on page two", "Done",
                                         page_range=[1, 1])
-        _check("success", r["success"] is True)
-        _check("replacements == 1", r["replacements"] == 1,
-               f"got {r['replacements']}")
+        assert r["success"] is True, "success"
+        assert r["replacements"] == 1, f"replacements == 1; got {r['replacements']}"
         with fitz.open(dst) as out:
-            _check("page 0 unchanged",
-                   "TARGET on page one" in out[0].get_text())
-            _check("page 1 updated",
-                   "Done" in out[1].get_text())
+            assert "TARGET on page one" in out[0].get_text(), "page 0 unchanged"
+            assert "Done" in out[1].get_text(), "page 1 updated"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -356,8 +333,8 @@ def test_template_empty():
     dst = _tmp_dst()
     try:
         r = core_xpc.apply_template_replacements(src, dst, {})
-        _check("success", r["success"] is True)
-        _check("applied == 0", r["applied"] == 0)
+        assert r["success"] is True, "success"
+        assert r["applied"] == 0, "applied == 0"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -368,9 +345,9 @@ def test_template_single_key():
     dst = _tmp_dst()
     try:
         r = core_xpc.apply_template_replacements(src, dst, {"CLIENT": "Acme Corp"})
-        _check("success", r["success"] is True, str(r))
-        _check("applied == 1", r["applied"] == 1, f"got {r['applied']}")
-        _check("not_found is empty", r["not_found"] == [])
+        assert r["success"] is True, f"success; {r}"
+        assert r["applied"] == 1, f"applied == 1; got {r['applied']}"
+        assert r["not_found"] == [], "not_found is empty"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -381,9 +358,9 @@ def test_template_key_not_found():
     dst = _tmp_dst()
     try:
         r = core_xpc.apply_template_replacements(src, dst, {"GHOST": "never"})
-        _check("success", r["success"] is True)
-        _check("applied == 0", r["applied"] == 0)
-        _check("GHOST in not_found", "GHOST" in r["not_found"])
+        assert r["success"] is True, "success"
+        assert r["applied"] == 0, "applied == 0"
+        assert "GHOST" in r["not_found"], "GHOST in not_found"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -395,7 +372,7 @@ def test_template_invalid_key_rejected():
     try:
         r = core_xpc.apply_template_replacements(src, dst,
                                                  {"bad\nkey": "value"})
-        _check("success is False", r["success"] is False)
+        assert r["success"] is False, "success is False"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -409,8 +386,8 @@ def test_template_custom_delimiters():
             src, dst, {"DATE": "2026-03-03"},
             delimiter_open="<<<", delimiter_close=">>>"
         )
-        _check("success", r["success"] is True)
-        _check("applied == 1", r["applied"] == 1, f"got {r['applied']}")
+        assert r["success"] is True, "success"
+        assert r["applied"] == 1, f"applied == 1; got {r['applied']}"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -431,13 +408,11 @@ def test_template_page_range():
         r = core_xpc.apply_template_replacements(
             src, dst, {"KEY": "Done"}, page_range=[1, 1]
         )
-        _check("success", r["success"] is True)
-        _check("applied == 1", r["applied"] == 1, f"got {r['applied']}")
+        assert r["success"] is True, "success"
+        assert r["applied"] == 1, f"applied == 1; got {r['applied']}"
         with fitz.open(dst) as out:
-            _check("page 0 unchanged",
-                   "{{KEY}}" in out[0].get_text())
-            _check("page 1 updated",
-                   "done" in out[1].get_text().lower())
+            assert "{{KEY}}" in out[0].get_text(), "page 0 unchanged"
+            assert "done" in out[1].get_text().lower(), "page 1 updated"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -451,11 +426,10 @@ def test_health_status_structure():
                 "error_rate", "total_calls", "total_errors",
                 "perf_summary", "log_level"]
     for key in required:
-        _check(f"has '{key}'", key in result)
-    _check("status in {ok, degraded}",
-           result.get("status") in ("ok", "degraded"))
-    _check("pymupdf_ok is True", result.get("pymupdf_ok") is True)
-    _check("error_rate is float", isinstance(result.get("error_rate"), float))
+        assert key in result, f"has '{key}'"
+    assert result.get("status") in ("ok", "degraded"), "status in {ok, degraded}"
+    assert result.get("pymupdf_ok") is True, "pymupdf_ok is True"
+    assert isinstance(result.get("error_rate"), float), "error_rate is float"
 
 
 # ── get_performance_stats ─────────────────────────────────────────────────────
@@ -473,14 +447,13 @@ def test_performance_stats_accumulate():
         for f in (src, dst): os.unlink(f)
 
     stats = core_xpc.get_performance_stats()
-    _check("returns dict", isinstance(stats, dict))
+    assert isinstance(stats, dict), "returns dict"
     # batch_replace or replace_text_in_pdf should show calls
     total_calls = sum(v.get("calls", 0) for v in stats.values())
-    _check("at least one call recorded", total_calls > 0,
-           f"got {total_calls}")
+    assert total_calls > 0, f"at least one call recorded; got {total_calls}"
     for op, entry in stats.items():
-        _check(f"  {op} has 'calls'", "calls" in entry)
-        _check(f"  {op} has 'avg_ms'", "avg_ms" in entry)
+        assert "calls" in entry, f"  {op} has 'calls'"
+        assert "avg_ms" in entry, f"  {op} has 'avg_ms'"
 
 
 # ── Cross-function integration ─────────────────────────────────────────────────
@@ -505,25 +478,22 @@ def test_batch_then_regex_pipeline():
              "replacement_text": "Acme Corp",
              "page_index": 0}
         ])
-        _check("step 1 success", r1["success"] is True, str(r1.get("message")))
-        _check("step 1 applied == 1", r1["applied"] == 1)
+        assert r1["success"] is True, f"step 1 success; {r1.get('message')}"
+        assert r1["applied"] == 1, "step 1 applied == 1"
 
         # Step 2: regex replace date format  YYYY/MM/DD → YYYY-MM-DD
+        # regex_replace_text takes a string replacement, not a callable.
+        # Use a fixed date string (the pattern matches exactly once in this fixture).
         r2 = core_xpc.regex_replace_text(mid, dst,
                                          r"\d{4}/\d{2}/\d{2}",
-                                         lambda m: m.group(0).replace("/", "-")
-                                         if hasattr(m, "group")
-                                         # regex_replace_text takes a string replacement
-                                         else "2026-03-03")
-        # Note: back-reference replacement of date separators requires
-        # a more complex pattern — just verify the call succeeds
-        _check("step 2 success", r2["success"] is True, str(r2.get("message")))
+                                         "2026-03-03")
+        assert r2["success"] is True, f"step 2 success; {r2.get('message')}"
 
         # Verify final output contains the batch-replaced name
         with fitz.open(dst) as out:
             text = out[0].get_text()
-        _check("final output has 'Acme Corp'", "acme corp" in text.lower())
-        _check("final output has 'Amount: $500'", "Amount: $500" in text)
+        assert "acme corp" in text.lower(), "final output has 'Acme Corp'"
+        assert "Amount: $500" in text, "final output has 'Amount: $500'"
 
     finally:
         for f in (src, mid, dst): os.unlink(f)
@@ -546,15 +516,14 @@ def test_template_then_verify_layout():
             "AMOUNT":  "$1,500.00",
             "DATE":    "2026-03-31",
         })
-        _check("template success", r["success"] is True)
-        _check("applied == 3", r["applied"] == 3, f"got {r['applied']}")
+        assert r["success"] is True, "template success"
+        assert r["applied"] == 3, f"applied == 3; got {r['applied']}"
 
         # Analyse layout of the produced document
         layout = core_xpc.analyze_layout(dst, 0)
-        _check("layout success", layout["success"] is True)
-        _check("layout_type is single_column",
-               layout["layout_type"] == "single_column",
-               f"got '{layout['layout_type']}'")
+        assert layout["success"] is True, "layout success"
+        assert layout["layout_type"] == "single_column", \
+            f"layout_type is single_column; got '{layout['layout_type']}'"
     finally:
         for f in (src, dst): os.unlink(f)
 
@@ -600,20 +569,22 @@ def main():
         test_template_then_verify_layout,
     ]
 
+    passed = 0
+    failed = 0
     for t in tests:
         try:
             t()
+            passed += 1
         except Exception:
             print(f"  ✗  {t.__name__} raised an exception:")
             traceback.print_exc()
-            global _failed
-            _failed += 1
+            failed += 1
 
     print("\n" + "=" * 60)
-    print(f"Results: {_passed} passed, {_failed} failed  "
-          f"({_passed}/{_passed + _failed})")
+    print(f"Results: {passed} passed, {failed} failed  "
+          f"({passed}/{passed + failed})")
     print("=" * 60)
-    return 0 if _failed == 0 else 1
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":

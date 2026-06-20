@@ -834,7 +834,7 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                                 "Reflow: Synthesis verification failed — ink not detected for synthesized glyphs. "
                                 "Returning failure to avoid silent wrong-font insertion."
                             )
-                            return False, None
+                            return False, "font_unavailable"
 
                     else:
                         msg = f"Reflow: Synthesis incomplete (missing {missing})." if missing else "Reflow: Synthesis failed/empty."
@@ -846,7 +846,7 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                             f"{msg} Returning failure instead of silent generic-font insertion "
                             f"to prevent visually incorrect output."
                         )
-                        return False, None
+                        return False, "font_unavailable"
 
                 else:
                     debug_log.append("Reflow: Cannot synthesize without source doc.")

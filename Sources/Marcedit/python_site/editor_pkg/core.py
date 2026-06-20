@@ -3824,6 +3824,22 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                             debug_log.append("Reflow Success!")
                         else:
                             debug_log.append("Reflow Failed (returned False)")
+                            # Propagate font-unavailable sentinel: if reflow could not embed or
+                            # synthesize the required font, and the caller has set
+                            # fail_on_font_unavailable, bail out now rather than silently
+                            # inserting Helvetica/Times as a wrong-font substitute.
+                            if (r_rect == "font_unavailable"
+                                    and manual_overrides
+                                    and manual_overrides.get('fail_on_font_unavailable')):
+                                debug_log.append(
+                                    "Font unavailable and fail_on_font_unavailable=True — "
+                                    "aborting edit instead of silently inserting Helvetica."
+                                )
+                                return {
+                                    'success': False,
+                                    'message': 'font_unavailable',
+                                    'debug_log': debug_log,
+                                }
                     except Exception as e:
                         debug_log.append(f"Reflow Exception: {e}")
 

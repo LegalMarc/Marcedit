@@ -1340,21 +1340,21 @@ struct PDFKitView: NSViewRepresentable {
     @Binding var currentScaleFactor: CGFloat
     @Binding var currentDestination: PDFDestination?
     
-    let onLineSelect: (String, Int) -> Void   // Single-click: select text
-    let onLineClick: (String, Int) -> Void    // Double-click: open edit dialog
+    let onLineSelect: (String, Int) -> Void          // Single-click: select text
+    let onLineClick: (String, Int, Int?) -> Void     // Double-click: open edit dialog; 3rd arg = 0-based occurrence ordinal or nil
     var onKeyDown: ((NSEvent) -> Bool)? = nil
-    
+
     // Default initializer support for previous calls
-    init(document: PDFDocument?, 
-         isDarkMode: Bool, 
+    init(document: PDFDocument?,
+         isDarkMode: Bool,
          isEditing: Bool = false,
          selectionMode: String = "line",
-         paragraphRect: CGRect? = nil, 
-         paragraphPageIndex: Int = 0, 
+         paragraphRect: CGRect? = nil,
+         paragraphPageIndex: Int = 0,
          currentScaleFactor: Binding<CGFloat>,
          currentDestination: Binding<PDFDestination?>,
-         onLineSelect: @escaping (String, Int) -> Void, 
-         onLineClick: @escaping (String, Int) -> Void, 
+         onLineSelect: @escaping (String, Int) -> Void,
+         onLineClick: @escaping (String, Int, Int?) -> Void,
          onKeyDown: ((NSEvent) -> Bool)? = nil) {
         self.document = document
         self.isDarkMode = isDarkMode
@@ -1404,7 +1404,11 @@ struct PDFKitView: NSViewRepresentable {
                 print("[InteractivePDFView] onClick: invalid page index")
                 return
             }
-            onLineClick(str, pageIndex)
+            // Derive the 0-based occurrence ordinal so the Python backend replaces
+            // only the clicked instance (not every match on the page).
+            let occurrenceIndex = PDFKitView.occurrenceOrdinal(
+                for: sel, on: p, in: pdfView.document)
+            onLineClick(str, pageIndex, occurrenceIndex)
         }
         
         pdfView.onKeyDown = onKeyDown
@@ -1517,5 +1521,61 @@ struct PDFKitView: NSViewRepresentable {
                 }
             }
         }
+    }
+
+    // MARK: - Occurrence ordinal derivation
+
+    /// Returns the 0-based index of `selection` among all occurrences of the
+    /// same text string on `page` within `document`.
+    ///
+    /// The search is case-insensitive and uses PDFKit's built-in text search,
+    /// which matches the Python backend's tokenisation closely enough for
+    /// single-page occurrence targeting. Returns `nil` when:
+    ///   - the document is nil (nothing open),
+    ///   - `findString` returns zero results,
+    ///   - the selection's bounds centre cannot be matched to any result rect,
+    ///   - or only one occurrence exists (ordinal 0 is redundant; omitting it
+    ///     lets the Python backend use its normal single-match fast path).
+    ///
+    /// The function is O(matches × 1) — matches are typically < 20 on a page,
+    /// so performance is not a concern.
+    static func occurrenceOrdinal(
+        for selection: PDFSelection,
+        on page: PDFPage,
+        in document: PDFDocument?
+    ) -> Int? {
+        guard let doc = document,
+              let text = selection.string, !text.isEmpty else { return nil }
+
+        // PDFDocument.findString returns results in reading order across the doc.
+        let allMatches = doc.findString(text, withOptions: .caseInsensitive)
+
+        // Keep only matches that fall on the target page.
+        let pageMatches = allMatches.filter { match in
+            // A PDFSelection may span pages; check the primary page.
+            match.pages.contains(where: { $0 === page })
+        }
+
+        guard pageMatches.count > 1 else {
+            // 0 or 1 matches → no disambiguation needed; nil preserves back-compat.
+            return nil
+        }
+
+        // Find which match corresponds to the clicked selection by comparing
+        // bounding rect centres (tolerance: half the average char width, ~4 pt).
+        let clickedBounds = selection.bounds(for: page)
+        let clickedCX = clickedBounds.midX
+        let clickedCY = clickedBounds.midY
+        let tolerance: CGFloat = max(clickedBounds.width / CGFloat(max(text.count, 1)), 4.0)
+
+        for (idx, match) in pageMatches.enumerated() {
+            let matchBounds = match.bounds(for: page)
+            if abs(matchBounds.midX - clickedCX) <= tolerance &&
+               abs(matchBounds.midY - clickedCY) <= tolerance {
+                return idx
+            }
+        }
+        // Centre-point match failed (e.g. cross-line selection or phantom mismatch).
+        return nil
     }
 }

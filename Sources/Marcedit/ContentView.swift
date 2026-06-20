@@ -198,10 +198,10 @@ extension ContentView {
         currentDestination: $vm.currentDestination,
         onLineSelect: { text, pageIdx in
             vm.handleLineSelection(text: text, pageIndex: pageIdx)
-        }, onLineClick: { text, pageIdx in
-            // Drag-to-select and double-click: Same action as single-click
-            // This enables safe selection where user drags to select text
-            vm.handleLineSelection(text: text, pageIndex: pageIdx)
+        }, onLineClick: { text, pageIdx, occIdx in
+            // Drag-to-select and double-click: open edit dialog for the clicked occurrence.
+            // occIdx (0-based) targets only that instance; nil → replace all (back-compat).
+            vm.handleLineSelection(text: text, pageIndex: pageIdx, occurrenceIndex: occIdx)
         }, onKeyDown: { event in
             let amount = event.modifierFlags.contains(.command) ? 1.0 : 0.1
             switch event.keyCode {

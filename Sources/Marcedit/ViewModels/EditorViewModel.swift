@@ -200,6 +200,7 @@ final class EditorViewModel: ObservableObject {
     var editingOriginalText: String { editSession.editingOriginalText }
     var editingText: String { get { editSession.editingText } set { editSession.editingText = newValue } }
     var editingPageIndex: Int { get { editSession.editingPageIndex } set { editSession.editingPageIndex = newValue } }
+    var editingOccurrenceIndex: Int? { get { editSession.editingOccurrenceIndex } set { editSession.editingOccurrenceIndex = newValue } }
     var detectedFont: String? { get { editSession.detectedFont } set { editSession.detectedFont = newValue } }
     var detectedFontName: String? { get { editSession.detectedFontName } set { editSession.detectedFontName = newValue } }
     var detectedFontFlags: Int { get { editSession.detectedFontFlags } set { editSession.detectedFontFlags = newValue } }
@@ -1214,16 +1215,16 @@ final class EditorViewModel: ObservableObject {
     
     // MARK: - Selection Handling
     
-    func handleLineSelection(text: String, pageIndex: Int) {
+    func handleLineSelection(text: String, pageIndex: Int, occurrenceIndex: Int? = nil) {
         // SAFE SELECTION: Always use line mode for predictable, single-unit editing
         // The paragraph mode is parked (v0.9-line-paragraph-mode tag) but disabled
         // to provide a simpler, more reliable editing experience.
         //
         // User selects text via drag or click → opens EditLineView for that text only
-        continueLineSelection(text: text, pageIndex: pageIndex)
+        continueLineSelection(text: text, pageIndex: pageIndex, occurrenceIndex: occurrenceIndex)
     }
-    
-    private func continueLineSelection(text: String, pageIndex: Int) {
+
+    private func continueLineSelection(text: String, pageIndex: Int, occurrenceIndex: Int? = nil) {
         // CRITICAL: Cancel stale preview state FIRST, before setting new state
         // This prevents cancelPreview() from restoring stale editingText
         if self.isShowingPreview {
@@ -1234,6 +1235,7 @@ final class EditorViewModel: ObservableObject {
         self.targetTextForReplacement = text  // IMMUTABLE: Used for all replacements during this edit session
         self.editingText = text  // Mutable: User can modify this
         self.editingPageIndex = pageIndex
+        self.editingOccurrenceIndex = occurrenceIndex
         self.detectedFont = nil
         
         // Check if this text was previously edited - restore those overrides
@@ -1882,6 +1884,8 @@ final class EditorViewModel: ObservableObject {
             if self.allowCollisionOverrun { dict["skip_collision"] = true }
             // Exhaustive font search: honour the global preference set in app Settings
             if UserDefaults.standard.bool(forKey: "exhaustiveFontSearch") { dict["exhaustive_search"] = true }
+            // Occurrence targeting: only replace the clicked instance (nil → replace all).
+            if let oi = self.editingOccurrenceIndex { dict["occurrence_index"] = oi }
             // PERF: Preview/intermediate saves use lightweight flags (garbage=0, deflate=false).
             // Only final user-initiated replacements produce a fully-optimised PDF.
             if !isPreview { dict["finalize"] = true }

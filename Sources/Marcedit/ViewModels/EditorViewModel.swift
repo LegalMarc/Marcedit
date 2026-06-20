@@ -149,6 +149,8 @@ final class EditorViewModel: ObservableObject {
     var lastScrubReportURLs: [UUID: URL] = [:]
     /// Stores the last scrub data directory URL per document ID
     var lastScrubDataDirURLs: [UUID: URL] = [:]
+    /// Stores the last metadata-view report URL per document ID (routed to Application Support)
+    var lastMetadataReportURLs: [UUID: URL] = [:]
 
     @Published var undoStack: [EditHistoryItem] = []
     @Published var redoStack: [EditHistoryItem] = []
@@ -2427,15 +2429,27 @@ final class EditorViewModel: ObservableObject {
              if Task.isCancelled { return }
              
              if result.success, let html = result.reportHTML {
-                 // Save report next to the PDF (same as Scrub)
-                 let pdfDir = doc.originalURL.deletingLastPathComponent()
+                 // Route report to Application Support — NOT next to the source PDF
+                 // (writing cleartext metadata next to the PDF would deposit it in iCloud/TM).
                  let pdfBaseName = doc.originalURL.deletingPathExtension().lastPathComponent
-                 let reportPath = pdfDir.appendingPathComponent("\(pdfBaseName)_metadata_report.html")
-                 
+                 let appSupportBase: URL = {
+                     let fm = FileManager.default
+                     if let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                         let marcEditDir = dir.appendingPathComponent("Marcedit/MetadataReports", isDirectory: true)
+                         try? fm.createDirectory(at: marcEditDir, withIntermediateDirectories: true)
+                         return marcEditDir
+                     }
+                     return URL(fileURLWithPath: NSTemporaryDirectory())
+                 }()
+                 let sessionID = UUID().uuidString.prefix(8)
+                 let reportPath = appSupportBase.appendingPathComponent("\(pdfBaseName)_\(sessionID)_metadata_report.html")
+
                  do {
                      try html.write(to: reportPath, atomically: true, encoding: .utf8)
-                     
+
                      await MainActor.run {
+                         // Register for Secure Erase
+                         self.lastMetadataReportURLs[id] = reportPath
                          ReportWindowController.openReportWindow(for: reportPath)
                      }
                  } catch {
@@ -2596,6 +2610,11 @@ final class EditorViewModel: ObservableObject {
                 filesToErase.append(reportURL)
             }
 
+            // 3a. Metadata-view report (routed to Application Support)
+            if let metaReportURL = lastMetadataReportURLs[id] {
+                filesToErase.append(metaReportURL)
+            }
+
             // 4. Scrub data directory (use the saved path so the session-ID suffix matches)
             if let dataDir = lastScrubDataDirURLs[id] {
                 if FileManager.default.fileExists(atPath: dataDir.path) {
@@ -2663,9 +2682,10 @@ final class EditorViewModel: ObservableObject {
                 self.redoStack.removeAll { $0.inputURL == doc.originalURL || $0.inputURL == doc.currentURL ||
                                             $0.outputURL == doc.originalURL || $0.outputURL == doc.currentURL }
 
-                // Remove scrub report and data dir references
+                // Remove scrub report, data dir, and metadata-view report references
                 self.lastScrubReportURLs.removeValue(forKey: id)
                 self.lastScrubDataDirURLs.removeValue(forKey: id)
+                self.lastMetadataReportURLs.removeValue(forKey: id)
 
                 // Remove document from list (re-fetch index since array may have changed during await)
                 if let currentIdx = self.documents.firstIndex(where: { $0.id == id }) {

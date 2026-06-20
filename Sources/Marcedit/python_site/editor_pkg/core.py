@@ -52,6 +52,32 @@ def _get_cached_font(font_path: str) -> object | None:
         return _font_object_cache[font_path]
 
 
+# ── Password-protected PDF guard ──────────────────────────────────────────────
+
+class _PasswordProtectedError(Exception):
+    """Raised by _open_pdf() when a PDF requires a password."""
+
+
+def _open_pdf(path: str) -> "fitz.Document":
+    """Open *path* as a fitz Document and verify it is not password-protected.
+
+    Raises:
+        _PasswordProtectedError: if ``doc.needs_pass`` is True after open.
+        Any fitz exception that fitz.open() itself raises.
+
+    Returns the open fitz.Document.  The caller is responsible for closing it
+    (either via ``doc.close()`` or a ``with`` block).
+    """
+    doc = fitz.open(path)
+    if doc.needs_pass:
+        doc.close()
+        raise _PasswordProtectedError(
+            "This PDF is password-protected. Open it in a PDF reader, "
+            "remove the password, and then edit it in Marcedit."
+        )
+    return doc
+
+
 # ── Pixmap cache (Week 8) ─────────────────────────────────────────────────────
 # Caches the "before" pixmap captures used by collision detection.  Only the
 # before-state snapshot is cached; the after-state is always freshly rendered
@@ -4236,7 +4262,7 @@ def replace_text_in_pdf(input_path: str, output_path: str, target_text: str, rep
                 return "".join(res)
             replacement_text = smarten(replacement_text)
 
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             result = _apply_replace_to_open_doc(
                 doc, target_text, replacement_text, page_number,
                 manual_overrides, skip_collision, occurrence_index,
@@ -4365,7 +4391,7 @@ def identify_font(input_path: str, page_number: int, target_text: str) -> dict:
     For OCR/scanned documents, returns is_ocr=True when page has no text layer.
     """
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             if page_number < 1 or page_number > len(doc):
                 return {
                     'success': False,
@@ -4473,7 +4499,7 @@ def expand_to_paragraph(input_path: str, page_number: int, span_text: str) -> di
         dict with 'expanded_text' containing the full paragraph text
     """
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             if page_number < 1 or page_number > len(doc):
                 return {'expanded_text': span_text, 'message': 'Invalid page number'}
             
@@ -4555,7 +4581,7 @@ def get_block_spans(input_path: str, page_number: int, span_text: str) -> dict:
         }
     """
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             if page_number < 1 or page_number > len(doc):
                 return {'success': False, 'spans': [], 'message': 'Invalid page number'}
             
@@ -4674,7 +4700,7 @@ def replace_block_with_spans(
     debug_log = []
     doc = None
     try:
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
 
         # BUG #53 FIX: Add complete page validation (empty doc check)
         if len(doc) == 0:
@@ -4873,7 +4899,7 @@ def find_font_interactive(input_path: str, page_index: int, target_text: str, ex
 
     doc = None
     try:
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
         if page_index < 0 or page_index >= len(doc):
             yield {'type': 'error', 'message': 'Invalid page index'}
             return
@@ -5013,7 +5039,7 @@ def flatten_document_to_outlines(input_path: str, output_path: str) -> dict:
     doc = None
     out_doc = None
     try:
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
         page_count = len(doc)
         debug_log.append(f"Document has {page_count} pages")
 
@@ -5215,7 +5241,7 @@ def extract_all_metadata(input_path: str) -> dict:
         except Exception as e:
             filesystem_meta['_error'] = str(e)
         
-        doc = fitz.open(input_path)
+        doc = _open_pdf(input_path)
 
         result = {
             "success": True,
@@ -6125,7 +6151,7 @@ def scrub_all_metadata(input_path: str, output_path: str, data_dir: str = None) 
             debug_log.append(f"Extracting embedded files to: {data_dir}")
             
             try:
-                doc = fitz.open(input_path)
+                doc = _open_pdf(input_path)
                 try:
                     embfile_count = doc.embfile_count()
 
@@ -6169,7 +6195,7 @@ def scrub_all_metadata(input_path: str, output_path: str, data_dir: str = None) 
                 debug_log.append(f"Embedded file extraction failed: {e}")
         
         # 3. Open document and clear metadata
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             old_metadata = doc.metadata
             debug_log.append(f"Original metadata keys: {list(old_metadata.keys())}")
 
@@ -6410,7 +6436,7 @@ def batch_replace(input_path: str, output_path: str,
     skipped = 0
 
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             for i, rep in enumerate(replacements):
                 target = rep.get("target_text", "")
                 replacement = rep.get("replacement_text", "")
@@ -6607,7 +6633,7 @@ def regex_replace(input_path: str, output_path: str,
     total_replaced = 0
 
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             total_pages = len(doc)
 
             if page_range:
@@ -6768,7 +6794,7 @@ def apply_template(input_path: str, output_path: str,
     matched_keys = set()
 
     try:
-        with fitz.open(input_path) as doc:
+        with _open_pdf(input_path) as doc:
             total_pages = len(doc)
 
             if page_range:

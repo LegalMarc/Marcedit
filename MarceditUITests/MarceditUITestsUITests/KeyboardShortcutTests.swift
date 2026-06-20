@@ -12,7 +12,7 @@
 //   Cmd++  Zoom In
 //   Cmd+-  Zoom Out
 //   Cmd+0  Fit to Window
-//   Cmd+R  Reload
+//   Cmd+R  (intentionally unbound — revert shortcut removed in issue #28)
 //   Cmd+W  Close Document
 
 import XCTest
@@ -264,10 +264,14 @@ final class KeyboardShortcutTests: MarceditTestCase {
         XCTAssertEqual(app.state, .runningForeground, "App crashed after Cmd+0")
     }
 
-    // MARK: - Cmd+R Reloads File
+    // MARK: - Cmd+R Is No Longer Bound To Revert
 
-    /// Cmd+R should reload the current document (reverting unsaved changes).
-    func testCmdRReloadsFile() throws {
+    /// Cmd+R is intentionally unbound. The revert-via-Cmd+R shortcut was removed in
+    /// issue #28 (revert is now driven from the sidebar's per-file Revert control), so
+    /// pressing Cmd+R must be a harmless no-op: the app stays alive and the document is
+    /// left untouched. This guards against Cmd+R being accidentally re-bound to a
+    /// destructive action.
+    func testCmdRIsNoLongerBoundToRevert() throws {
         guard let c = corpus.first(where: { $0.id.hasPrefix("001") }) else {
             XCTFail("Corpus case 001 not found"); return
         }
@@ -276,16 +280,16 @@ final class KeyboardShortcutTests: MarceditTestCase {
         XCTAssertTrue(app.waitForPDFReady(timeout: 90))
         Thread.sleep(forTimeInterval: 1.5)
 
-        // Press Cmd+R to reload
+        // Press Cmd+R — it is not bound to any action.
         app.typeKey("r", modifierFlags: .command)
         Thread.sleep(forTimeInterval: 2.0)
 
-        // App should still be running and PDFViewer visible
+        // App should still be running and PDFViewer visible (no-op, no crash).
         XCTAssertEqual(app.state, .runningForeground, "App crashed after Cmd+R")
         let viewer = app.descendants(matching: .any)
             .matching(identifier: "PDFViewer")
             .firstMatch
-        XCTAssertTrue(viewer.exists, "PDFViewer not visible after Cmd+R reload")
+        XCTAssertTrue(viewer.exists, "PDFViewer not visible after Cmd+R")
     }
 
     // MARK: - Cmd+W Closes Document (Clean)

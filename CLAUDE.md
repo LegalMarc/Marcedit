@@ -90,4 +90,12 @@ Use `Scripts/sign_notarize_release.sh` — the only supported release path. See 
 
 ## Preferences
 
-- Do not auto-commit; always ask before committing.
+- **Landing work (commit / push / merge).** Once a run is finished, you are authorized to
+  commit the completed work, push the branch, and open + merge a PR to `main` to leave the
+  tree clean — without asking first — *as long as you see no reason not to*. Reasons not to
+  (stop and ask instead): tests/CI not green, an unresolved failure or regression, an
+  ambiguous or risky change that needs my call, anything irreversible beyond a normal merge,
+  or work that isn't actually complete. Prefer the PR flow (push → `gh pr create` →
+  `gh pr merge`, squash) and confirm CI is green before merging. When genuinely in doubt,
+  ask. (This relaxes the former "always ask before committing" rule, which you can still
+  fall back to for speculative mid-run commits.)

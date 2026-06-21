@@ -78,11 +78,16 @@ jobs:
 
     - name: Build and verify release security posture
       run: |
+        # CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO stops Xcode from injecting the debug
+        # get-task-allow entitlement during this ad-hoc CI build. The real distribution
+        # build (Scripts/sign_notarize_release.sh) re-signs with the explicit
+        # Marcedit.entitlements, so this makes the CI posture check match the shipped app.
         xcodebuild build \
           -scheme MarceditUITests \
           -configuration Release \
           -destination 'platform=macOS' \
-          -derivedDataPath "$PWD/build/DerivedData"
+          -derivedDataPath "$PWD/build/DerivedData" \
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
         python3 Scripts/verify_release_security.py \
           --app "$PWD/build/DerivedData/Build/Products/Release/Marcedit.app"
 

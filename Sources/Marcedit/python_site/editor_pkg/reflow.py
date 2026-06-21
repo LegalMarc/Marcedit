@@ -237,12 +237,22 @@ def _detect_alignment(page, target_rect, line_rect, debug_log=None):
     center_tolerance = content_width * 0.05
     edge_tolerance = 20.0
 
-    if abs(text_center - content_center) < center_tolerance and ref_rect.width < content_width * 0.9:
+    # Only treat the edit as CENTER when the target IS (most of) the centered element.
+    # A single word INSIDE a centered line still flows left-to-right at its own position —
+    # re-centering just that word on its own midpoint breaks the line (collisions/gaps,
+    # e.g. "OF THE ENTITIES" with THE→MARCH centering MARCH onto THE's center). For a
+    # sub-word, fall through to LEFT so it inserts at its x0 and the suffix reflows.
+    target_covers_line = line_rect is None or target_rect.width >= ref_rect.width * 0.8
+    if (abs(text_center - content_center) < center_tolerance
+            and ref_rect.width < content_width * 0.9
+            and target_covers_line):
         debug_log.append(
             f"Alignment: CENTER (center dist: {abs(text_center - content_center):.1f}pt, "
             f"tol: {center_tolerance:.1f}pt)"
         )
         return "center"
+    if not target_covers_line and abs(text_center - content_center) < center_tolerance:
+        debug_log.append("Alignment: LEFT (sub-word inside a centered line — flow, don't re-center)")
 
     if abs(text_right - content_right) < edge_tolerance and abs(text_left - content_left) > edge_tolerance * 2:
         debug_log.append(

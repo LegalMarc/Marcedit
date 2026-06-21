@@ -63,7 +63,9 @@ def harvest_glyphs(doc, required_chars, target_font_name, target_color=None, pag
         blocks = page.get_text("rawdict").get("blocks", [])
 
         for b in blocks:
+            if not missing: break
             for l in b.get("lines", []):
+                if not missing: break
                 for s in l.get("spans", []):
                     # Parse source font
                     s_font = s.get('font', '')
@@ -85,7 +87,7 @@ def harvest_glyphs(doc, required_chars, target_font_name, target_color=None, pag
                         continue
                     if src_italic != target_italic:
                         continue
-                        
+
                     # Check Color Match (if requested)
                     if target_color is not None:
                         # s['color'] is typically an integer in sRGB format from PyMuPDF rawdict
@@ -129,144 +131,148 @@ def harvest_glyphs(doc, required_chars, target_font_name, target_color=None, pag
 
                              if dist > max_dist:
                                  continue
-                        
-                chars = s.get('chars', [])
-                for i, char in enumerate(chars):
-                    c = char.get('c', '')
-                    if not c:
-                        continue
-                    if c in missing:
-                        # Validate visual presence (Ink Check)
-                        # Render a small thumbnail of the candidate char
-                        # We use the bbox slightly padded to ensure we catch the ink
-                        char_bbox = char.get('bbox')
-                        if not char_bbox:
-                            continue
-                        check_rect = fitz.Rect(char_bbox)
-                        if check_rect.is_empty or check_rect.width < 0.1 or check_rect.height < 0.1:
-                            continue
 
-                        # Check if it has ink AND correct color
-                        # Assuming white background.
-                        # We need to verify that the glyph:
-                        # 1. Has visible ink (not completely white/transparent)
-                        # 2. Matches the target color (if specified)
-                        try:
-                            pix = page.get_pixmap(clip=check_rect, matrix=fitz.Matrix(2, 2), alpha=False)
-
-                            # Validate pixmap is not empty
-                            if not pix or pix.width == 0 or pix.height == 0:
-                                continue
-
-                            has_ink = False
-                            color_matches = True if target_color is None else False
-
-                            samples = pix.samples
-                            if samples:
-                                # Scan pixels to validate both ink presence and color
-                                for j in range(0, len(samples) - 2, 3): # RGB assumption; -2 prevents over-read
-                                    r_pix = samples[j]
-                                    g_pix = samples[j+1]
-                                    b_pix = samples[j+2]
-                                    lum = (r_pix + g_pix + b_pix) // 3
-
-                                    # Check for ink (any non-white pixel)
-                                    if lum < 240:
-                                        has_ink = True
-
-                                        # If target color is specified, validate pixel color
-                                        if target_color is not None:
-                                            # Extract target RGB
-                                            r_target = (target_color >> 16) & 0xFF
-                                            g_target = (target_color >> 8) & 0xFF
-                                            b_target = target_color & 0xFF
-
-                                            # Calculate color distance
-                                            color_dist = ((r_pix - r_target)**2 + (g_pix - g_target)**2 + (b_pix - b_target)**2)**0.5
-
-                                            # For dark/black targets, use strict tolerance
-                                            # This prevents red glyphs from matching black targets
-                                            if r_target < 50 and g_target < 50 and b_target < 50:
-                                                # Strict tolerance for black - only allow near-black pixels
-                                                if color_dist < 50:  # Allow some anti-aliasing
-                                                    color_matches = True
-                                                    break  # Found a valid pixel
-                                            else:
-                                                # More lenient for colored targets
-                                                if color_dist < 80:
-                                                    color_matches = True
-                                                    break
-
-                            if not has_ink:
-                                # Skip invisible glyph
-                                continue
-
-                            if not color_matches:
-                                # Skip glyph with wrong color
-                                # This prevents red glyphs from being used when we want black
-                                continue
-
-                        except Exception:
-                            # If pixmap fails, likely invalid rect. Skip.
-                            continue
-
-                        # Found a valid candidate!
-                        # We capture detailed info.
-                        
-                        # Calculate advance width
-                        # If not last char, diff with next char origin
-                        advance = 0
-                        if i < len(chars) - 1:
-                            next_org = chars[i+1].get('origin')
-                            curr_org = char.get('origin')
-                            if next_org and curr_org and len(next_org) >= 1 and len(curr_org) >= 1:
-                                advance = next_org[0] - curr_org[0]
-                        else:
-                            # Last char: bbox width + estimated side bearing
-                            # BBox width is typically the "ink" bounds, not the full
-                            # character cell. Add ~12% for typical side bearings.
-                            # This prevents character overlap in synthesis.
-                            bbox = char.get('bbox')
-                            if not bbox:
-                                continue
-                            bbox_width = bbox[2] - bbox[0]
-                            advance = bbox_width * 1.12  # 12% for side bearings
-
-                        char_origin = char.get('origin')
-                        if not char_origin:
-                            continue  # Skip glyphs without origin data
-                        char_bbox_final = char.get('bbox')
-                        if not char_bbox_final:
-                            continue
-                        glyph_map[c] = {
-                            'page': pno,
-                            'bbox': fitz.Rect(char_bbox_final),
-                            'origin': char_origin,
-                            'font': s.get('font', ''),
-                            'size': s.get('size', 12.0),
-                            'color': s.get('color', 0),
-                            'advance': advance
-                        }
-                        missing.discard(c)  # Use discard to avoid KeyError on duplicates
-                        if not missing: break
-
-                # Harvest space advance from this matching-font span if not yet measured.
-                # Spaces have no ink, so they're excluded from the ink-check loop above.
-                # Instead, find any space char in the span and measure origin-to-origin advance.
-                if ' ' not in glyph_map:
+                    # CRITICAL: the glyph harvesting below MUST stay nested inside this
+                    # span loop so the family/weight/style/color filters above actually
+                    # gate it. (It used to sit one level out, so every char was harvested
+                    # from whatever span happened to be LAST on the line regardless of
+                    # font — mixing e.g. a Book 'a' with an Extra-Bold 'M' into one word.)
+                    chars = s.get('chars', [])
                     for i, char in enumerate(chars):
-                        if char.get('c') == ' ' and i < len(chars) - 1:
-                            curr_org = char.get('origin')
-                            next_org = chars[i + 1].get('origin')
-                            if curr_org and next_org and len(curr_org) >= 1 and len(next_org) >= 1:
-                                space_adv = next_org[0] - curr_org[0]
-                                if space_adv > 0:
-                                    # Scale-independent: store advance at the span's font size
-                                    span_size = s.get('size', 12.0)
-                                    glyph_map[' '] = {'advance': space_adv, 'size': span_size}
-                                    break
+                        c = char.get('c', '')
+                        if not c:
+                            continue
+                        if c in missing:
+                            # Validate visual presence (Ink Check)
+                            # Render a small thumbnail of the candidate char
+                            # We use the bbox slightly padded to ensure we catch the ink
+                            char_bbox = char.get('bbox')
+                            if not char_bbox:
+                                continue
+                            check_rect = fitz.Rect(char_bbox)
+                            if check_rect.is_empty or check_rect.width < 0.1 or check_rect.height < 0.1:
+                                continue
 
-                if not missing: break
-            if not missing: break
+                            # Check if it has ink AND correct color
+                            # Assuming white background.
+                            # We need to verify that the glyph:
+                            # 1. Has visible ink (not completely white/transparent)
+                            # 2. Matches the target color (if specified)
+                            try:
+                                pix = page.get_pixmap(clip=check_rect, matrix=fitz.Matrix(2, 2), alpha=False)
+
+                                # Validate pixmap is not empty
+                                if not pix or pix.width == 0 or pix.height == 0:
+                                    continue
+
+                                has_ink = False
+                                color_matches = True if target_color is None else False
+
+                                samples = pix.samples
+                                if samples:
+                                    # Scan pixels to validate both ink presence and color
+                                    for j in range(0, len(samples) - 2, 3): # RGB assumption; -2 prevents over-read
+                                        r_pix = samples[j]
+                                        g_pix = samples[j+1]
+                                        b_pix = samples[j+2]
+                                        lum = (r_pix + g_pix + b_pix) // 3
+
+                                        # Check for ink (any non-white pixel)
+                                        if lum < 240:
+                                            has_ink = True
+
+                                            # If target color is specified, validate pixel color
+                                            if target_color is not None:
+                                                # Extract target RGB
+                                                r_target = (target_color >> 16) & 0xFF
+                                                g_target = (target_color >> 8) & 0xFF
+                                                b_target = target_color & 0xFF
+
+                                                # Calculate color distance
+                                                color_dist = ((r_pix - r_target)**2 + (g_pix - g_target)**2 + (b_pix - b_target)**2)**0.5
+
+                                                # For dark/black targets, use strict tolerance
+                                                # This prevents red glyphs from matching black targets
+                                                if r_target < 50 and g_target < 50 and b_target < 50:
+                                                    # Strict tolerance for black - only allow near-black pixels
+                                                    if color_dist < 50:  # Allow some anti-aliasing
+                                                        color_matches = True
+                                                        break  # Found a valid pixel
+                                                else:
+                                                    # More lenient for colored targets
+                                                    if color_dist < 80:
+                                                        color_matches = True
+                                                        break
+
+                                if not has_ink:
+                                    # Skip invisible glyph
+                                    continue
+
+                                if not color_matches:
+                                    # Skip glyph with wrong color
+                                    # This prevents red glyphs from being used when we want black
+                                    continue
+
+                            except Exception:
+                                # If pixmap fails, likely invalid rect. Skip.
+                                continue
+
+                            # Found a valid candidate!
+                            # We capture detailed info.
+
+                            # Calculate advance width
+                            # If not last char, diff with next char origin
+                            advance = 0
+                            if i < len(chars) - 1:
+                                next_org = chars[i+1].get('origin')
+                                curr_org = char.get('origin')
+                                if next_org and curr_org and len(next_org) >= 1 and len(curr_org) >= 1:
+                                    advance = next_org[0] - curr_org[0]
+                            else:
+                                # Last char: bbox width + estimated side bearing
+                                # BBox width is typically the "ink" bounds, not the full
+                                # character cell. Add ~12% for typical side bearings.
+                                # This prevents character overlap in synthesis.
+                                bbox = char.get('bbox')
+                                if not bbox:
+                                    continue
+                                bbox_width = bbox[2] - bbox[0]
+                                advance = bbox_width * 1.12  # 12% for side bearings
+
+                            char_origin = char.get('origin')
+                            if not char_origin:
+                                continue  # Skip glyphs without origin data
+                            char_bbox_final = char.get('bbox')
+                            if not char_bbox_final:
+                                continue
+                            glyph_map[c] = {
+                                'page': pno,
+                                'bbox': fitz.Rect(char_bbox_final),
+                                'origin': char_origin,
+                                'font': s.get('font', ''),
+                                'size': s.get('size', 12.0),
+                                'color': s.get('color', 0),
+                                'advance': advance
+                            }
+                            missing.discard(c)  # Use discard to avoid KeyError on duplicates
+                            if not missing: break
+
+                    # Harvest space advance from this matching-font span if not yet measured.
+                    # Spaces have no ink, so they're excluded from the ink-check loop above.
+                    # Instead, find any space char in the span and measure origin-to-origin advance.
+                    if ' ' not in glyph_map:
+                        for i, char in enumerate(chars):
+                            if char.get('c') == ' ' and i < len(chars) - 1:
+                                curr_org = char.get('origin')
+                                next_org = chars[i + 1].get('origin')
+                                if curr_org and next_org and len(curr_org) >= 1 and len(next_org) >= 1:
+                                    space_adv = next_org[0] - curr_org[0]
+                                    if space_adv > 0:
+                                        # Scale-independent: store advance at the span's font size
+                                        span_size = s.get('size', 12.0)
+                                        glyph_map[' '] = {'advance': space_adv, 'size': span_size}
+                                        break
+
+                    if not missing: break
 
     return glyph_map, missing

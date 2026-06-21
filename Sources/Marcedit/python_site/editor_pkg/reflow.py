@@ -53,6 +53,75 @@ def _insert_text_unicode_safe(page, pos, text, fontname, fontsize, color,
     return True
 
 
+def _synth_reinsert_suffix(page, src_doc, suffix, shift, bg_fill, debug_log=None):
+    """Reinsert suffix spans shifted LEFT by *shift* points by STAMPING their glyphs
+    harvested from the source document.
+
+    This is the fallback for when the suffix font is embedded (e.g. TimesNewRomanPSMT,
+    Asap) and so cannot be reloaded by name for insert_text — the case that previously
+    left an obvious gap open. It pre-harvests EVERY span first and bails (touching
+    nothing) if any glyph is unharvestable, so we never erase a suffix we cannot redraw.
+
+    Returns True iff the whole suffix was redacted and re-stamped at the shifted position.
+    """
+    if src_doc is None or not suffix:
+        return False
+
+    plans = []
+    for sp in suffix:
+        sp_text = sp.get('text', '')
+        if not sp_text or not sp_text.strip():
+            continue  # whitespace-only span carries no ink to move
+        sp_font = sp.get('font', '') or ''
+        sp_size = sp.get('size', 12.0) or 12.0
+        sp_color = sp.get('color', 0)
+        color_int = sp_color if isinstance(sp_color, int) else None
+        needed = set(sp_text) - {' '}
+        try:
+            glyph_map, missing = harvester.harvest_glyphs(
+                src_doc, needed, sp_font, target_color=color_int, page_limit=50)
+        except Exception as e:
+            if debug_log is not None:
+                debug_log.append(f"Reflow: synth suffix harvest error ({e})")
+            return False
+        missing.discard(' ')
+        if missing:
+            if debug_log is not None:
+                debug_log.append(
+                    f"Reflow: synth suffix reinsert not viable — unharvestable {sorted(missing)} in '{sp_font}'")
+            return False
+        sp_rect = sp['bbox'] if isinstance(sp['bbox'], fitz.Rect) else fitz.Rect(sp['bbox'])
+        sp_origin = sp.get('origin')
+        if sp_origin and len(sp_origin) >= 2:
+            new_pos = (sp_origin[0] - shift, sp_origin[1])
+        else:
+            new_pos = (sp_rect.x0 - shift, sp_rect.y0 + sp_rect.height * 0.85)
+        plans.append((sp_rect, sp_text, glyph_map, sp_size, new_pos))
+
+    if not plans:
+        return False
+
+    # Commit: erase the old suffix positions, then stamp the harvested glyphs shifted.
+    for sp_rect, *_ in plans:
+        sp_redact = fitz.Rect(sp_rect.x0 - 1, sp_rect.y0, sp_rect.x1 + 1, sp_rect.y1) & page.rect
+        if not sp_redact.is_empty:
+            page.add_redact_annot(sp_redact, fill=bg_fill)
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+
+    ok = True
+    for sp_rect, sp_text, glyph_map, sp_size, new_pos in plans:
+        try:
+            synthesizer.draw_text_as_vectors(page, new_pos, sp_text, glyph_map, size=sp_size, doc=src_doc)
+        except Exception as e:
+            ok = False
+            if debug_log is not None:
+                debug_log.append(f"Reflow: synth suffix stamp error ({e})")
+    if debug_log is not None and ok:
+        debug_log.append(
+            f"Reflow: suffix reinserted via SYNTHESIS (shifted left {shift:.1f}pt, {len(plans)} span(s))")
+    return ok
+
+
 def _get_line_structure(page, target_rect, debug_log=None):
     """
     Find the line containing the target_rect and split it into components.
@@ -764,6 +833,10 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
         original_fontname = font_info.get('original_fontname', fontname)
         synthesis_attempted = False
         synthesis_success = False
+        # When the replacement is SYNTHESIZED (not insert_text) draw_width is only a helv
+        # estimate of a different face. Capture the synthesizer's real laid-out width so the
+        # suffix is placed against where the replacement actually ends, not the estimate.
+        synth_drawn_width = None
     
         # Calculate baseline position
         # Prefer using the actual origin of the target spans if available.
@@ -843,7 +916,7 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 missing.discard(' ')
 
                 if len(glyph_map) > 0 and not missing:
-                    _, drawn_rects = synthesizer.draw_text_as_vectors(
+                    synth_drawn_width, drawn_rects = synthesizer.draw_text_as_vectors(
                         page, pos, replacement_text, glyph_map, size=fontsize, doc=src_doc
                     )
                     debug_log.append(f"Reflow: Synthesis FIRST succeeded with {len(glyph_map)} glyphs")
@@ -899,7 +972,7 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 
                     if len(glyph_map) > 0 and not missing:
                         # Perform Synthesis
-                        _, drawn_rects = synthesizer.draw_text_as_vectors(page, pos, replacement_text, glyph_map, size=fontsize, doc=src_doc)
+                        synth_drawn_width, drawn_rects = synthesizer.draw_text_as_vectors(page, pos, replacement_text, glyph_map, size=fontsize, doc=src_doc)
                         debug_log.append(f"Reflow: Synthesized text with {len(glyph_map)} glyphs.")
                     
                         # OUTPUT VERIFICATION
@@ -1030,17 +1103,26 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 suffix_bbox0 = suffix[0]['bbox'] if isinstance(suffix[0]['bbox'], fitz.Rect) else fitz.Rect(suffix[0]['bbox'])
                 suffix_start_x = suffix_bbox0.x0
                 # GAP-PRESERVING (mirrors the grow path): pull the suffix left by exactly the
-                # target's rendered-width reduction, using the exact draw width. This keeps the
-                # document's original spacing instead of over/under-closing from the padded
-                # est_new_width.
-                replacement_end_x = insertion_x + draw_width
+                # target's rendered-width reduction. Use the synthesizer's real laid-out width
+                # when the replacement was synthesized (draw_width is then only a helv estimate
+                # of a different face, which would mis-place the suffix — e.g. "Acme"+"a Division"
+                # overlapping into "Acmea"); otherwise draw_width is exact.
+                effective_repl_width = synth_drawn_width if (synthesis_success and synth_drawn_width) else draw_width
+                replacement_end_x = insertion_x + effective_repl_width
                 actual_gap = target_rect.x1 - replacement_end_x
 
                 if actual_gap > gap_threshold:
                     if not can_reinsert_suffix_exactly():
+                        # The suffix font is embedded and can't be reloaded by name for
+                        # insert_text. Rather than leave the gap, stamp the suffix's glyphs
+                        # harvested from the source doc (synthesis) at the shifted position.
+                        if _synth_reinsert_suffix(page, src_doc, suffix, actual_gap, bg_fill, debug_log):
+                            debug_log.append(
+                                f"Reflow: BUG-2 fix complete via synthesis — suffix shifted left by {actual_gap:.1f}pt")
+                            return True, line_rect
                         debug_log.append(
                             "Reflow: BUG-2 suffix gap left open — exact suffix font "
-                            "reinsertion is unavailable, so suffix text was not redacted."
+                            "reinsertion is unavailable and synthesis was not viable."
                         )
                         return True, line_rect
 

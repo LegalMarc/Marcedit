@@ -18,6 +18,14 @@ PROJECT_ROOT="$(pwd)"
 
 MODE="${1:-python}"
 
+# Prefer the canonical 3.11 venv (matches the shipped framework / CI); fall back
+# to system python3 so the runner still works on a clean checkout.
+if [ -x "$PROJECT_ROOT/.venv311/bin/python" ]; then
+    PYBIN="$PROJECT_ROOT/.venv311/bin/python"
+else
+    PYBIN="python3"
+fi
+
 # ── Python visual edit harness ────────────────────────────────────────────────
 
 run_python_harness() {
@@ -31,7 +39,7 @@ run_python_harness() {
         return 1
     fi
 
-    python3 tests/visual_edit_harness.py
+    "$PYBIN" tests/visual_edit_harness.py
 
     echo ""
     echo "── Python harness complete ──"
@@ -109,6 +117,40 @@ PY
     fi
 }
 
+# ── Grade (drive → judge → worst-first gallery) ───────────────────────────────
+
+run_grade() {
+    run_python_harness
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Grading edits (visual pass/warn/fail)"
+    echo "═══════════════════════════════════════════════════════════════"
+    set +e
+    "$PYBIN" tests/grade_edits.py
+    grade_status=$?
+    set -e
+
+    if [ "$grade_status" -eq 2 ]; then
+        echo ""
+        echo "⚠  No automatic grader (set ANTHROPIC_API_KEY for unattended grading)."
+        echo "   Batches are ready in tests/visual_edit_harness_report/_grade_batch_*.json —"
+        echo "   have a Claude session grade them, then re-run: $0 gallery"
+        return 0
+    fi
+
+    "$PYBIN" tests/grade_gallery.py
+    echo "   Gallery: tests/visual_edit_harness_report/gallery.html"
+}
+
+# Rebuild only the gallery/report from existing grades (no re-driving edits).
+run_gallery() {
+    "$PYBIN" tests/grade_gallery.py
+    "$PYBIN" tests/visual_edit_harness.py --with-review >/dev/null 2>&1 || true
+    echo "   Gallery: tests/visual_edit_harness_report/gallery.html"
+    echo "   Report:  tests/visual_edit_harness_report/report.html"
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {
@@ -135,11 +177,21 @@ case "$MODE" in
         run_xcui_tests
         print_summary
         ;;
+    grade)
+        run_grade
+        ;;
+    gallery)
+        run_gallery
+        ;;
     summary)
         print_summary
         ;;
     *)
-        echo "Usage: $0 {python|xcui|all|summary}"
+        echo "Usage: $0 {python|grade|gallery|xcui|all|summary}"
+        echo "  python   drive edits headlessly, render before/after report"
+        echo "  grade    drive + judge each edit (pass/warn/fail) + worst-first gallery"
+        echo "  gallery  rebuild gallery/report from existing grades (no re-drive)"
+        echo "  xcui     full XCUITest visual report (requires display)"
         exit 1
         ;;
 esac

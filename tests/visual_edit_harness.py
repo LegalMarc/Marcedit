@@ -127,9 +127,14 @@ def _render_page_png(pdf_path: str, page_num: int, out_path: str, dpi: int = 150
 
 def _collect_edit_candidates(pdf_path: str, max_candidates: int = 30):
     """
-    Return a list of (page_num_1based, span_text) candidates from the PDF.
-    Picks single-line spans from various pages.
+    Return a list of (page_num_1based, target_text) candidates from the PDF.
+
+    Targets are WHOLE words (and occasional 2-3 word phrases) extracted via
+    PyMuPDF word tokenisation — never raw style-spans. This mirrors how a real
+    user edits (click a word), so we don't generate mid-word-fragment edits like
+    'EDICAL' (out of 'MEDICAL') that no user would ever make.
     """
+    from collections import defaultdict
     candidates = []
     try:
         doc = fitz.open(pdf_path)
@@ -139,15 +144,25 @@ def _collect_edit_candidates(pdf_path: str, max_candidates: int = 30):
             if len(candidates) >= max_candidates:
                 break
             page = doc[pg_idx]
-            blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE).get("blocks", [])
-            for block in blocks:
-                if block.get("type") != 0:
-                    continue
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        text = span.get("text", "")
-                        if _is_editable_span(text):
-                            candidates.append((pg_idx + 1, text.strip()))
+            # word tuples: (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+            words = page.get_text("words")
+            lines = defaultdict(list)
+            for w in words:
+                lines[(w[5], w[6])].append(w)
+            for _key, lws in lines.items():
+                lws.sort(key=lambda w: w[7])  # word order within the line
+                tokens = [w[4] for w in lws]
+                for i, tok in enumerate(tokens):
+                    if len(candidates) >= max_candidates:
+                        break
+                    # single whole word
+                    if _is_editable_span(tok):
+                        candidates.append((pg_idx + 1, tok.strip()))
+                    # occasional boundary-aligned phrase — exercises suffix reflow
+                    if len(tokens) - i >= 2 and random.random() < 0.35:
+                        phrase = " ".join(tokens[i:i + random.choice([2, 3])]).strip()
+                        if _is_editable_span(phrase) and len(phrase) <= 60:
+                            candidates.append((pg_idx + 1, phrase))
         doc.close()
     except Exception as e:
         print(f"  [collect] ERROR: {e}")
@@ -372,6 +387,7 @@ def process_pdf(pdf_path: Path, out_dir: Path) -> dict:
                 target_text=target_text,
                 replacement_text=replacement,
                 page_number=page_num,
+                occurrence_index=0,  # edit ONE instance, like a user click — not replace-all
             )
         except Exception as exc:
             result = {"success": False, "message": str(exc)}

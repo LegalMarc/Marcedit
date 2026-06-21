@@ -409,43 +409,55 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 return False
         return True
 
-    # BUG-3 FIX: Pre-check overflow before touching the document.
-    # If the replacement is wider than the original AND there is suffix content on the
-    # same line, shift the suffix right when there is room. If there is no room, block
-    # before touching the document instead of falling back to a colliding legacy insert.
-    if suffix and delta > fontsize * 0.5:
+    # LENGTH-CHANGE REFLOW: Pre-check before touching the document.
+    # When the replacement encroaches on the word-space in front of the suffix, shift the
+    # suffix right by just enough to restore one clean word-gap. This fires on ANY tight
+    # encroachment, not only large grows — previously the `delta > fontsize*0.5` gate let
+    # small grows silently eat the word-space and collide (e.g. "vice;"->"delta" => "deltaor").
+    #   * Large overflow that can't be placed safely  -> block the edit (avoid a bad insert).
+    #   * Small overflow that can't be shifted safely  -> keep the minor overlap (no worse
+    #     than the pre-fix behavior; don't fail the whole edit over a sub-pixel touch).
+    if suffix:
         suffix_bbox = suffix[0]['bbox']
         suffix_start_x = (suffix_bbox.x0 if isinstance(suffix_bbox, fitz.Rect) else fitz.Rect(suffix_bbox).x0)
         replacement_end_x = insertion_x + est_new_width
-        if replacement_end_x > suffix_start_x:
-            overflow_pt = replacement_end_x - suffix_start_x
-            padding = max(1.0, fontsize * 0.15)
-            required_shift = overflow_pt + padding
+        # Only intervene at near/actual collision — NOT when spacing is merely a touch
+        # tight — so we never nudge an already-fine edit (which would open a needless gap).
+        min_gap = fontsize * 0.05
+        word_gap = fontsize * 0.18  # clean spacing to restore between replacement and suffix
+        if replacement_end_x + min_gap > suffix_start_x:
+            # Shift the suffix so it begins one clean word_gap past the replacement end.
+            required_shift = (replacement_end_x + word_gap) - suffix_start_x
+            is_large = delta > fontsize * 0.5
             suffix_end_x = max(
                 (sp['bbox'] if isinstance(sp['bbox'], fitz.Rect) else fitz.Rect(sp['bbox'])).x1
                 for sp in suffix
             )
             right_margin = min(page.rect.x1 - fontsize, line_rect.x1 + fontsize * 4)
+            blocked_reason = None
             if suffix_end_x + required_shift > right_margin:
+                blocked_reason = (f"shifting suffix to x={suffix_end_x + required_shift:.1f} exceeds "
+                                  f"right margin x={right_margin:.1f}")
+            elif not can_reinsert_suffix_exactly():
+                blocked_reason = "exact suffix-font reinsertion is unavailable"
+
+            if blocked_reason:
+                if is_large:
+                    debug_log.append(
+                        f"Reflow: OVERFLOW BLOCKED — replacement ends x={replacement_end_x:.1f}, "
+                        f"suffix starts x={suffix_start_x:.1f}; {blocked_reason}. Returning failure."
+                    )
+                    return False, None
                 debug_log.append(
-                    f"Reflow: OVERFLOW BLOCKED — replacement ends at x={replacement_end_x:.1f}, "
-                    f"suffix starts at x={suffix_start_x:.1f}, overflow={overflow_pt:.1f}pt, "
-                    f"and shifting suffix to x={suffix_end_x + required_shift:.1f} would exceed "
-                    f"right margin x={right_margin:.1f}. Returning failure to prevent collision."
+                    f"Reflow: minor overlap kept (delta={delta:.1f}pt) — {blocked_reason}; "
+                    f"not failing the edit over a small encroachment."
                 )
-                return False, None
-            suffix_shift_right = required_shift
-            debug_log.append(
-                f"Reflow: Suffix right-shift planned — replacement ends at x={replacement_end_x:.1f}, "
-                f"suffix starts at x={suffix_start_x:.1f}, overflow={overflow_pt:.1f}pt, "
-                f"shift={suffix_shift_right:.1f}pt."
-            )
-            if not can_reinsert_suffix_exactly():
+            else:
+                suffix_shift_right = required_shift
                 debug_log.append(
-                    "Reflow: OVERFLOW BLOCKED — suffix requires shifting, but exact suffix "
-                    "font reinsertion is unavailable. Returning failure before redacting suffix."
+                    f"Reflow: Suffix right-shift planned — replacement ends x={replacement_end_x:.1f}, "
+                    f"suffix starts x={suffix_start_x:.1f}, shift={required_shift:.1f}pt (large={is_large})."
                 )
-                return False, None
 
     # SETUP SOURCE DOC for Visual Copy / Harvesting
     src_doc = None
@@ -642,6 +654,22 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 if debug_log is not None:
                     debug_log.append(f"Reflow: Background color sampling failed, using white: {e}")
         page.add_redact_annot(cover_rect, fill=bg_fill)
+
+        # TRUNCATION FIX: When the replacement is WIDER than the target, it is drawn
+        # extending rightward into the x-range the old suffix occupies. The old suffix
+        # must be erased BEFORE we draw the replacement — if we redact it afterward
+        # (as the BUG-3 reinsert step used to), apply_redactions erases the replacement's
+        # own tail (e.g. "Chicago" rendered as "C"). So redact the old suffix here, in
+        # the same batch as the target, and only reinsert it (shifted right) post-draw.
+        # Safe: the L443 pre-check already proved the suffix can be reinserted exactly.
+        if suffix and suffix_shift_right > 0:
+            for sp in suffix:
+                sp_rect = sp['bbox'] if isinstance(sp['bbox'], fitz.Rect) else fitz.Rect(sp['bbox'])
+                sp_redact = fitz.Rect(sp_rect.x0 - 1, sp_rect.y0, sp_rect.x1 + 1, sp_rect.y1) & page.rect
+                if not sp_redact.is_empty:
+                    page.add_redact_annot(sp_redact, fill=bg_fill)
+            debug_log.append(f"Reflow: Pre-redacted {len(suffix)} old suffix span(s) before draw (grow case)")
+
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 
         debug_log.append(f"Reflow: Redacted target area (removing text layer): {cover_rect}")
@@ -870,13 +898,9 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
             if suffix_shift_right > 0:
                 shift = suffix_shift_right
 
-                # Step 1: Redact all suffix spans from their current positions
-                for sp in suffix:
-                    sp_rect = sp['bbox'] if isinstance(sp['bbox'], fitz.Rect) else fitz.Rect(sp['bbox'])
-                    sp_redact = fitz.Rect(sp_rect.x0 - 1, sp_rect.y0, sp_rect.x1 + 1, sp_rect.y1) & page.rect
-                    if not sp_redact.is_empty:
-                        page.add_redact_annot(sp_redact, fill=bg_fill)
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+                # Step 1: (old suffix spans were already redacted before the replacement
+                # was drawn — see the TRUNCATION FIX above — so we do NOT redact again here;
+                # doing so would erase the wider replacement's tail.)
 
                 # Step 2: Reinsert each suffix span at its shifted position
                 for sp in suffix:

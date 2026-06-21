@@ -4013,7 +4013,9 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                                 debug_log=debug_log
                             )
                         else:
-                            page.insert_text((ins_x, ins_y), replacement_text, fontname=use_internal_fontname, fontsize=adjusted_fontsize, color=color)
+                            reflow._insert_text_unicode_safe(page, (ins_x, ins_y), replacement_text,
+                                                             use_internal_fontname, adjusted_fontsize, color,
+                                                             fontbuffer=smart_reuse_buffer, debug_log=debug_log)
                     else:
                         # Select styled built-in font based on detected weight/style
                         fallback_fontname = _get_base14_fontname(
@@ -4040,7 +4042,10 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                                         debug_log=debug_log
                                     )
                                 else:
-                                    page.insert_text((ins_x, ins_y), replacement_text, fontname="R0", fontsize=adjusted_fontsize, color=color)
+                                    reflow._insert_text_unicode_safe(page, (ins_x, ins_y), replacement_text,
+                                                                     "R0", adjusted_fontsize, color,
+                                                                     fontbuffer=getattr(repl_font, 'buffer', None),
+                                                                     debug_log=debug_log)
                             except Exception:
                                 if legacy_alignment == "justified":
                                     _insert_justified_text(
@@ -4057,7 +4062,9 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                                         debug_log=debug_log
                                     )
                                 else:
-                                    page.insert_text((ins_x, ins_y), replacement_text, fontname=fallback_fontname, fontsize=adjusted_fontsize, color=color)
+                                    reflow._insert_text_unicode_safe(page, (ins_x, ins_y), replacement_text,
+                                                                     fallback_fontname, adjusted_fontsize, color,
+                                                                     debug_log=debug_log)
                         else:
                             if legacy_alignment == "justified":
                                 _insert_justified_text(
@@ -4074,7 +4081,9 @@ def _apply_replace_to_open_doc(doc, target_text: str, replacement_text: str,
                                     debug_log=debug_log
                                 )
                             else:
-                                page.insert_text((ins_x, ins_y), replacement_text, fontname=fallback_fontname, fontsize=adjusted_fontsize, color=color)
+                                reflow._insert_text_unicode_safe(page, (ins_x, ins_y), replacement_text,
+                                                                 fallback_fontname, adjusted_fontsize, color,
+                                                                 debug_log=debug_log)
 
                     # Apply style simulation after text insertion
                     # This is critical for preserving bold/italic/decorations when the replacement font

@@ -4,6 +4,55 @@ from . import harvester
 from . import synthesizer
 
 
+def _insert_text_unicode_safe(page, pos, text, fontname, fontsize, color,
+                              fontbuffer=None, fontfile=None, debug_log=None):
+    """Drop-in for page.insert_text that ALSO renders codepoints above U+00FF.
+
+    Base-14 / simple PDF fonts encode through a one-byte table, so plain
+    insert_text substitutes a bullet for "smart" punctuation and accents
+    (curly quotes U+2018-201D, em/en dash U+2013-2014, é/ñ/…). For any text that
+    contains such a character we embed + subset the resolved face through a
+    TextWriter, which carries full Unicode. Pure Latin-1 text keeps the original
+    insert_text call verbatim, so the common path is unchanged to the byte.
+
+    Returns True iff the Unicode (TextWriter) path was taken.
+    """
+    if all(ord(c) <= 0xFF for c in text):
+        page.insert_text(pos, text, fontname=fontname, fontsize=fontsize, color=color)
+        return False
+
+    def _is_internal_name(name):
+        # Page-local resource names like "R0"/"F12" are not loadable by fitz.Font.
+        return bool(name) and name[0] in "RF" and name[1:].isdigit()
+
+    font = None
+    for make in (
+        lambda: fitz.Font(fontbuffer=fontbuffer) if fontbuffer else None,
+        lambda: fitz.Font(fontfile=fontfile) if (fontfile and os.path.exists(fontfile)) else None,
+        lambda: fitz.Font(fontname) if (fontname and not _is_internal_name(fontname)) else None,
+        lambda: fitz.Font("helv"),
+    ):
+        try:
+            font = make()
+        except Exception:
+            font = None
+        if font is not None:
+            break
+
+    if font is None:
+        # Could not build any Unicode face — fall back to the original path. The
+        # special glyphs may bullet, but the edit still lands (never crash).
+        page.insert_text(pos, text, fontname=fontname, fontsize=fontsize, color=color)
+        return False
+
+    tw = fitz.TextWriter(page.rect)
+    tw.append(pos, text, font=font, fontsize=fontsize)
+    tw.write_text(page, color=color)
+    if debug_log is not None:
+        debug_log.append(f"Reflow: Unicode-safe insertion via TextWriter (face='{getattr(font, 'name', fontname)}')")
+    return True
+
+
 def _get_line_structure(page, target_rect, debug_log=None):
     """
     Find the line containing the target_rect and split it into components.
@@ -809,8 +858,11 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
         if not synthesis_success:
             standard_insertion_success = False
             try:
-                # Try standard insertion with clean_fontname (subset prefix already stripped above)
-                page.insert_text(pos, replacement_text, fontname=clean_fontname, fontsize=fontsize, color=color)
+                # Try standard insertion with clean_fontname (subset prefix already stripped above).
+                # Unicode-safe: routes curly quotes / dashes / accents through an embedded
+                # TextWriter face instead of letting the base-14 encoder bullet them.
+                _insert_text_unicode_safe(page, pos, replacement_text, clean_fontname,
+                                          fontsize, color, fontbuffer=font_buffer, debug_log=debug_log)
                 debug_log.append(f"Reflow: Standard insertion succeeded with font: {clean_fontname} (original: {fontname})")
                 standard_insertion_success = True
             except Exception as e:

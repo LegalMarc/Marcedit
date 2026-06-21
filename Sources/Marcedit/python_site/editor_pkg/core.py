@@ -2370,6 +2370,20 @@ def _detect_text_decorations(page, rect: fitz.Rect) -> dict:
                 y1 = p1[1] if hasattr(p1, '__getitem__') else getattr(p1, 'y', 0)
                 if abs(y0 - y1) < 2:  # Nearly horizontal
                     line_y = (y0 + y1) / 2
+
+                    # X-OVERLAP GUARD: a real underline/strikethrough runs under/through
+                    # the glyphs. Reject horizontal lines elsewhere on the page that merely
+                    # share the text's Y — common in graphics-dense PDFs (e.g. a boarding
+                    # pass with 1000+ stray line segments) and the cause of phantom
+                    # strike-through/underline on replacements. Require the line to cover
+                    # most of the text's horizontal extent.
+                    x0p = p0[0] if hasattr(p0, '__getitem__') else getattr(p0, 'x', 0)
+                    x1p = p1[0] if hasattr(p1, '__getitem__') else getattr(p1, 'x', 0)
+                    lx0, lx1 = (x0p, x1p) if x0p <= x1p else (x1p, x0p)
+                    x_overlap = min(lx1, rect.x1) - max(lx0, rect.x0)
+                    if x_overlap < (rect.x1 - rect.x0) * 0.5:
+                        continue  # line doesn't span the text → not its decoration
+
                     text_baseline = rect.y0 + (rect.y1 - rect.y0) * 0.85
 
                     # Check line width

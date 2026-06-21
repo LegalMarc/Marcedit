@@ -406,11 +406,23 @@ def _detect_alignment(page, target_rect, line_rect, debug_log=None):
         debug_log.append("Alignment: LEFT (sub-word inside a centered line — flow, don't re-center)")
 
     if abs(text_right - content_right) < edge_tolerance and abs(text_left - content_left) > edge_tolerance * 2:
+        # Only RIGHT-anchor when the target IS (most of) the line — a genuine right-aligned
+        # standalone value whose right edge must be preserved. A sub-word that merely ENDS
+        # near the right margin (the last word of a left-flowing label like "Customer
+        # Receipt") is NOT a right-aligned line: its prefix is fixed at the left, so
+        # right-anchoring a narrower replacement opens a gap between the prefix and the new
+        # word (e.g. "Customer        Llc"). For a sub-word, fall through to LEFT so it
+        # inserts at its x0 and flows naturally after the prefix.
+        if target_covers_line:
+            debug_log.append(
+                f"Alignment: RIGHT (right dist: {abs(text_right - content_right):.1f}pt, "
+                f"left dist: {abs(text_left - content_left):.1f}pt)"
+            )
+            return "right"
         debug_log.append(
-            f"Alignment: RIGHT (right dist: {abs(text_right - content_right):.1f}pt, "
-            f"left dist: {abs(text_left - content_left):.1f}pt)"
+            "Alignment: LEFT (last word near right margin, but prefix present — "
+            "flow from target x0, don't right-anchor)"
         )
-        return "right"
 
     debug_log.append("Alignment: LEFT (default)")
     return "left"

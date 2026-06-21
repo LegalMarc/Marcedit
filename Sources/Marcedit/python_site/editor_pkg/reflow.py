@@ -53,16 +53,47 @@ def _insert_text_unicode_safe(page, pos, text, fontname, fontsize, color,
     return True
 
 
-def _synth_reinsert_suffix(page, src_doc, suffix, shift, bg_fill, debug_log=None):
-    """Reinsert suffix spans shifted LEFT by *shift* points by STAMPING their glyphs
-    harvested from the source document.
+def _synth_suffix_viable(doc, suffix):
+    """True iff every ink-bearing suffix span's glyphs can be harvested from *doc*.
 
-    This is the fallback for when the suffix font is embedded (e.g. TimesNewRomanPSMT,
-    Asap) and so cannot be reloaded by name for insert_text — the case that previously
-    left an obvious gap open. It pre-harvests EVERY span first and bails (touching
-    nothing) if any glyph is unharvestable, so we never erase a suffix we cannot redraw.
+    Used to decide BEFORE redacting (the grow pre-check) whether the embedded-font suffix
+    can be moved via synthesis. Checked against the still-pristine working doc since the
+    real source doc isn't open yet at pre-check time.
+    """
+    if doc is None or not suffix:
+        return False
+    saw_ink = False
+    for sp in suffix:
+        sp_text = sp.get('text', '') or ''
+        if not sp_text.strip():
+            continue
+        saw_ink = True
+        sp_color = sp.get('color', 0)
+        color_int = sp_color if isinstance(sp_color, int) else None
+        try:
+            _gm, missing = harvester.harvest_glyphs(
+                doc, set(sp_text) - {' '}, sp.get('font', '') or '',
+                target_color=color_int, page_limit=50)
+        except Exception:
+            return False
+        missing.discard(' ')
+        if missing:
+            return False
+    return saw_ink
 
-    Returns True iff the whole suffix was redacted and re-stamped at the shifted position.
+
+def _synth_reinsert_suffix(page, src_doc, suffix, dx, bg_fill, debug_log=None, redact=True):
+    """Reinsert suffix spans shifted by *dx* points (signed: + right, - left) by STAMPING
+    their glyphs harvested from the source document.
+
+    This is the path for when the suffix font is embedded (e.g. TimesNewRomanPSMT, Asap,
+    Calibri) and so cannot be reloaded by name for insert_text — the case that previously
+    left a gap open (shrink) or blocked the whole edit (grow). It pre-harvests EVERY span
+    first and bails (touching nothing) if any glyph is unharvestable, so we never erase a
+    suffix we cannot redraw. Set redact=False when the caller already erased the old suffix
+    positions (the grow path pre-redacts before drawing the wider replacement).
+
+    Returns True iff the whole suffix was re-stamped at the shifted position.
     """
     if src_doc is None or not suffix:
         return False
@@ -93,20 +124,21 @@ def _synth_reinsert_suffix(page, src_doc, suffix, shift, bg_fill, debug_log=None
         sp_rect = sp['bbox'] if isinstance(sp['bbox'], fitz.Rect) else fitz.Rect(sp['bbox'])
         sp_origin = sp.get('origin')
         if sp_origin and len(sp_origin) >= 2:
-            new_pos = (sp_origin[0] - shift, sp_origin[1])
+            new_pos = (sp_origin[0] + dx, sp_origin[1])
         else:
-            new_pos = (sp_rect.x0 - shift, sp_rect.y0 + sp_rect.height * 0.85)
+            new_pos = (sp_rect.x0 + dx, sp_rect.y0 + sp_rect.height * 0.85)
         plans.append((sp_rect, sp_text, glyph_map, sp_size, new_pos))
 
     if not plans:
         return False
 
-    # Commit: erase the old suffix positions, then stamp the harvested glyphs shifted.
-    for sp_rect, *_ in plans:
-        sp_redact = fitz.Rect(sp_rect.x0 - 1, sp_rect.y0, sp_rect.x1 + 1, sp_rect.y1) & page.rect
-        if not sp_redact.is_empty:
-            page.add_redact_annot(sp_redact, fill=bg_fill)
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+    # Commit: erase the old suffix positions (unless already pre-redacted), then stamp.
+    if redact:
+        for sp_rect, *_ in plans:
+            sp_redact = fitz.Rect(sp_rect.x0 - 1, sp_rect.y0, sp_rect.x1 + 1, sp_rect.y1) & page.rect
+            if not sp_redact.is_empty:
+                page.add_redact_annot(sp_redact, fill=bg_fill)
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
 
     ok = True
     for sp_rect, sp_text, glyph_map, sp_size, new_pos in plans:
@@ -118,7 +150,7 @@ def _synth_reinsert_suffix(page, src_doc, suffix, shift, bg_fill, debug_log=None
                 debug_log.append(f"Reflow: synth suffix stamp error ({e})")
     if debug_log is not None and ok:
         debug_log.append(
-            f"Reflow: suffix reinserted via SYNTHESIS (shifted left {shift:.1f}pt, {len(plans)} span(s))")
+            f"Reflow: suffix reinserted via SYNTHESIS (shifted {dx:+.1f}pt, {len(plans)} span(s))")
     return ok
 
 
@@ -519,6 +551,7 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
         debug_log.append(f"Reflow: LEFT positioning - x={insertion_x:.2f}")
 
     suffix_shift_right = 0.0
+    suffix_grow_via_synth = False  # set when the grow suffix must be stamped (embedded font)
     suffix_fontfile = font_info.get('fontfile')
 
     def can_reinsert_suffix_exactly():
@@ -577,12 +610,21 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 for sp in suffix
             )
             right_margin = min(page.rect.x1 - fontsize, line_rect.x1 + fontsize * 4)
+            use_synth_for_suffix = False
             blocked_reason = None
             if suffix_end_x + required_shift > right_margin:
                 blocked_reason = (f"shifting suffix to x={suffix_end_x + required_shift:.1f} exceeds "
-                                  f"right margin x={right_margin:.1f}")
+                                  f"right margin x={right_margin:.1f}")  # no room on the line; synthesis can't help
             elif not can_reinsert_suffix_exactly():
-                blocked_reason = "exact suffix-font reinsertion is unavailable"
+                # The suffix font is embedded and can't be reloaded by name for insert_text.
+                # If its glyphs can be stamped from the source doc, shift it via synthesis
+                # instead of blocking the whole edit (checked against the still-pristine
+                # working doc; the real source doc isn't open until after this pre-check).
+                if (page.parent.name and os.path.exists(page.parent.name)
+                        and _synth_suffix_viable(page.parent, suffix)):
+                    use_synth_for_suffix = True
+                else:
+                    blocked_reason = "exact suffix-font reinsertion is unavailable"
 
             if blocked_reason:
                 if is_large:
@@ -597,10 +639,11 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 )
             else:
                 suffix_shift_right = required_shift
+                suffix_grow_via_synth = use_synth_for_suffix
                 debug_log.append(
                     f"Reflow: Suffix right-shift planned — replacement ends x={replacement_end_x:.1f}, "
                     f"target ends x={target_rect.x1:.1f}, suffix starts x={suffix_start_x:.1f}, "
-                    f"gap-preserving shift={required_shift:.1f}pt (large={is_large})."
+                    f"gap-preserving shift={required_shift:.1f}pt (large={is_large}, synth={use_synth_for_suffix})."
                 )
 
     # SETUP SOURCE DOC for Visual Copy / Harvesting
@@ -1046,7 +1089,28 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
 
             # BUG-3: Move suffix right when replacement grows into it but there is room.
             gap_threshold = fontsize * 0.3  # 30% of char width is perceptibly large
-            if suffix_shift_right > 0:
+            if suffix_shift_right > 0 and suffix_grow_via_synth:
+                # Embedded suffix font: stamp its harvested glyphs shifted right. The old
+                # suffix spans were already pre-redacted before the wider replacement was
+                # drawn (TRUNCATION FIX), so redact=False here. Viability was confirmed in
+                # the pre-check, so this should succeed; if it somehow can't, the suffix
+                # stays redacted (gap) rather than a bad insert.
+                #
+                # Recompute the shift from the replacement's REAL drawn width: the pre-check
+                # used a helv estimate, but when the replacement is itself synthesized (the
+                # target face is also embedded) that estimate is for the wrong font and
+                # undershoots, leaving the suffix tight against it ("gammaour"). draw_width
+                # is exact for the insert_text path, so this is a no-op there.
+                effective_repl_width = synth_drawn_width if (synthesis_success and synth_drawn_width) else draw_width
+                shift = (insertion_x + effective_repl_width) - target_rect.x1
+                if shift < suffix_shift_right:
+                    shift = suffix_shift_right  # never pull the suffix back into the replacement
+                if _synth_reinsert_suffix(page, src_doc, suffix, shift, bg_fill, debug_log, redact=False):
+                    debug_log.append(f"Reflow: BUG-3 fix complete via synthesis — suffix shifted right by {shift:.1f}pt")
+                else:
+                    debug_log.append(
+                        "Reflow: BUG-3 synthesis suffix reinsert failed post-pre-check (suffix left redacted)")
+            elif suffix_shift_right > 0:
                 shift = suffix_shift_right
 
                 # Step 1: (old suffix spans were already redacted before the replacement
@@ -1116,7 +1180,7 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                         # The suffix font is embedded and can't be reloaded by name for
                         # insert_text. Rather than leave the gap, stamp the suffix's glyphs
                         # harvested from the source doc (synthesis) at the shifted position.
-                        if _synth_reinsert_suffix(page, src_doc, suffix, actual_gap, bg_fill, debug_log):
+                        if _synth_reinsert_suffix(page, src_doc, suffix, -actual_gap, bg_fill, debug_log):
                             debug_log.append(
                                 f"Reflow: BUG-2 fix complete via synthesis — suffix shifted left by {actual_gap:.1f}pt")
                             return True, line_rect

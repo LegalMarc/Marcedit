@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Sources', 'Mar
 
 from editor_pkg.reflow import (
     _get_line_structure,
+    _detect_alignment,
     reflow_line,
 )
 
@@ -551,6 +552,53 @@ class TestIntegrationReflowScenarios:
         assert new_width < old_width
 
         doc.close()
+
+
+class TestDetectAlignment:
+    """Test suite for _detect_alignment, covering the RIGHT-anchor guard.
+
+    A standard US-letter page is 612x792, so content_left=45.9,
+    content_right=566.1, content_center=306.0 (page_width * 0.075 / 0.925).
+    """
+
+    @pytest.fixture
+    def page(self):
+        doc = fitz.open()
+        doc.new_page(width=612, height=792)
+        page = doc[0]
+        yield page
+        doc.close()
+
+    def test_full_line_right_aligned_value_stays_right(self, page):
+        """A standalone value whose right edge hugs the right margin and that IS
+        (most of) its line should still RIGHT-anchor so the right edge is kept."""
+        # Narrow line near the right margin; target covers the whole line.
+        line_rect = fitz.Rect(505.0, 30.0, 560.0, 45.0)
+        target_rect = fitz.Rect(505.0, 30.0, 560.0, 45.0)
+        assert _detect_alignment(page, target_rect, line_rect) == "right"
+
+    def test_last_word_near_right_margin_with_prefix_flows_left(self, page):
+        """The regression guard: a sub-word that merely ENDS near the right margin
+        but has a prefix on its line must flow LEFT (insert at target x0), not
+        right-anchor — otherwise a narrower replacement opens a gap after the
+        prefix (e.g. 'Customer        Llc')."""
+        # Wide line: left far from content_left, right near content_right.
+        line_rect = fitz.Rect(120.0, 30.0, 560.0, 45.0)
+        # Target is the last short word at the right end (small fraction of line).
+        target_rect = fitz.Rect(525.0, 30.0, 560.0, 45.0)
+        assert _detect_alignment(page, target_rect, line_rect) == "left"
+
+    def test_sub_word_inside_centered_line_flows_left(self, page):
+        """A sub-word inside a centered line flows left (existing CENTER guard)."""
+        line_rect = fitz.Rect(206.0, 30.0, 406.0, 45.0)  # centered, width 200
+        target_rect = fitz.Rect(330.0, 30.0, 360.0, 45.0)  # small interior word
+        assert _detect_alignment(page, target_rect, line_rect) == "left"
+
+    def test_manual_left_default(self, page):
+        """An ordinary left-flowing line returns left."""
+        line_rect = fitz.Rect(50.0, 30.0, 300.0, 45.0)
+        target_rect = fitz.Rect(50.0, 30.0, 110.0, 45.0)
+        assert _detect_alignment(page, target_rect, line_rect) == "left"
 
 
 if __name__ == "__main__":

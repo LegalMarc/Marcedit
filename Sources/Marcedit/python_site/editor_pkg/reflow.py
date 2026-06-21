@@ -3,6 +3,7 @@ import os
 from . import harvester
 from . import synthesizer
 
+
 def _get_line_structure(page, target_rect, debug_log=None):
     """
     Find the line containing the target_rect and split it into components.
@@ -366,6 +367,17 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
     delta = est_new_width - old_width
     debug_log.append(f"Reflow: Old W: {old_width:.2f}, New W: {est_new_width:.2f}, Delta: {delta:.2f}")
 
+    # The replacement is rendered below via insert_text(fontname=clean_fontname) with no
+    # embedded buffer and no kerning fudge. PyMuPDF advances each glyph by that font's
+    # width, so text_length() on the exact draw font equals the RENDERED width to the
+    # pixel (verified empirically). Use this for suffix placement — est_new_width carries
+    # a kerning fudge (+up to 3%) and may be measured against an embedded face we don't
+    # actually draw with, so it over-predicts ~6% and pushed the suffix too far right.
+    try:
+        draw_width = fitz.Font(clean_fontname).text_length(replacement_text, fontsize=fontsize)
+    except Exception:
+        draw_width = est_new_width
+
     manual_alignment = font_info.get('justification') or font_info.get('alignment')
     if isinstance(manual_alignment, str) and manual_alignment.strip():
         alignment = manual_alignment.strip().lower()
@@ -430,14 +442,17 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
     if suffix:
         suffix_bbox = suffix[0]['bbox']
         suffix_start_x = (suffix_bbox.x0 if isinstance(suffix_bbox, fitz.Rect) else fitz.Rect(suffix_bbox).x0)
-        replacement_end_x = insertion_x + est_new_width
-        # Only intervene at near/actual collision — NOT when spacing is merely a touch
-        # tight — so we never nudge an already-fine edit (which would open a needless gap).
+        # Exact rendered end of the replacement (draw_width == rendered width to the pixel).
+        replacement_end_x = insertion_x + draw_width
         min_gap = fontsize * 0.05
-        word_gap = fontsize * 0.18  # clean spacing to restore between replacement and suffix
+        # Only intervene when the (exact-width) replacement actually encroaches on the suffix.
         if replacement_end_x + min_gap > suffix_start_x:
-            # Shift the suffix so it begins one clean word_gap past the replacement end.
-            required_shift = (replacement_end_x + word_gap) - suffix_start_x
+            # GAP-PRESERVING shift: move the suffix by exactly the target's rendered-width
+            # change, so the document's ORIGINAL spacing is reproduced — one clean word-space
+            # where there was one, and glyph-tight where the suffix abutted the target (an
+            # intra-word edit). The old code added a fixed word_gap on top of the suffix's own
+            # leading space, which doubled the spacing and read as a slightly-wide gap.
+            required_shift = replacement_end_x - target_rect.x1
             is_large = delta > fontsize * 0.5
             suffix_end_x = max(
                 (sp['bbox'] if isinstance(sp['bbox'], fitz.Rect) else fitz.Rect(sp['bbox'])).x1
@@ -466,7 +481,8 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
                 suffix_shift_right = required_shift
                 debug_log.append(
                     f"Reflow: Suffix right-shift planned — replacement ends x={replacement_end_x:.1f}, "
-                    f"suffix starts x={suffix_start_x:.1f}, shift={required_shift:.1f}pt (large={is_large})."
+                    f"target ends x={target_rect.x1:.1f}, suffix starts x={suffix_start_x:.1f}, "
+                    f"gap-preserving shift={required_shift:.1f}pt (large={is_large})."
                 )
 
     # SETUP SOURCE DOC for Visual Copy / Harvesting
@@ -961,8 +977,12 @@ def reflow_line(page, target_rect, replacement_text, font_info, debug_log=None, 
             elif delta < -gap_threshold:
                 suffix_bbox0 = suffix[0]['bbox'] if isinstance(suffix[0]['bbox'], fitz.Rect) else fitz.Rect(suffix[0]['bbox'])
                 suffix_start_x = suffix_bbox0.x0
-                replacement_end_x = insertion_x + est_new_width
-                actual_gap = suffix_start_x - replacement_end_x
+                # GAP-PRESERVING (mirrors the grow path): pull the suffix left by exactly the
+                # target's rendered-width reduction, using the exact draw width. This keeps the
+                # document's original spacing instead of over/under-closing from the padded
+                # est_new_width.
+                replacement_end_x = insertion_x + draw_width
+                actual_gap = target_rect.x1 - replacement_end_x
 
                 if actual_gap > gap_threshold:
                     if not can_reinsert_suffix_exactly():

@@ -104,6 +104,7 @@ tests/visual_harness/automated_output/
 tests/visual_harness/diagnostic_output/
 tests/visual_harness/*.pdf
 tests/visual_edit_harness_report/
+tests/visual_edit_harness_report_prev/
 /tmp/
 
 # Local Claude Code agent config
